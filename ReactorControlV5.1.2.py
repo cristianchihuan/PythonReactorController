@@ -97,6 +97,7 @@ while Valid_entry == False :
 
 ##Begin Settings
 SP_WRITE_DELAY = 0.2
+TITTLE = "Universal Reactor V5.1.2"
 
 DefaultMFC1ComPort='COM5'
 DefaultMFC2ComPort='COM6'
@@ -452,7 +453,7 @@ class WatlowConnection:
                 time.sleep(0.8)
                 self.ser.isOpen()
                 print("Watlow is Connected")
-                print(self.ReadSP())
+                #print(self.ReadSP())
                 logging.critical("Watlow is Connected %d", i)
                 break
             except Exception as e:
@@ -496,9 +497,11 @@ class WatlowConnection:
             ReadTemp = struct.unpack('>f', binascii.unhexlify(value))[0]
             ReadTemp = (ReadTemp-32)/1.8
             ReadTemp = round(ReadTemp,2)
+            logging.debug( "WatlowPV , %f , %s",ReadTemp, value)
             return ReadTemp
         except Exception as e:
-            print("ERROR in Read T %s", e)       
+            print("ERROR in Read T %s", e) 
+            logging.critical("Error in read Temperature %s, %s",e, value)      
             
     def ReadSP(self):
         try:
@@ -527,7 +530,8 @@ class WatlowConnection:
             #self.ControlMode('On')
             print('Set point changed to:',value)
         except Exception as e:
-            print("ERROR in Write SP T", e)     
+            print("ERROR in Write SP T", e) 
+            logging.critical("Error in Write Setpoint %s",e)     
           
     def WriteRampRate(self,value):
         try:
@@ -556,6 +560,7 @@ class WatlowConnection:
                 print('Control Loop Off')
         except Exception as e:
             print("ERROR in Write Watlow Control Mode %s" ,e)
+            logging.critical("Error in setting Control Mode %s",e)
 
 #New class for NI temperature controller
 
@@ -748,7 +753,7 @@ class ControllerGui:
             #self.ProfilePiecesFrame.grid(row=2, column=0, columnspan=5)    
 
             #MainFrame
-            self.label = tkinter.Label(self.GeneralFrame, text="Coogan's Controller v1.4")
+            self.label = tkinter.Label(self.GeneralFrame, text=TITTLE)
             self.label.grid(row=0,column=0,columnspan=2)
             self.close_button = tkinter.Button(self.GeneralFrame, text="Close", command=self.CloseProgram, width=20, height=2, bg='red')
             self.close_button.grid(row=1,column=0,columnspan=2)
@@ -1154,7 +1159,7 @@ class ControllerGui:
                 Wt.WriteSP(float(Tvalue))
                 Wt.WriteRampRate(float(RampRate))
                 #Wt.WriteSP(float(Tvalue))
-                self.SetPointPart.config(text=str(Wt.ReadSP())[:4])
+                #self.SetPointPart.config(text=str(Wt.ReadSP())[:4])
                 print('Wrote SP')
             except Exception as e:
                 print("ERROR in Write Temp SP, probably not a number: ", e )
@@ -1340,7 +1345,7 @@ class ControllerGui:
 
         # --- Step 4: Process Profile and Dosing Logic ---
         if self.ProfileBool["text"] == "Profile is On":
-            print("Before Profile Logic")
+            #print("Before Profile Logic")
             if self.ReachedTempBool == False:
                 print('Waiting for Temperature')
                 try:
@@ -1349,7 +1354,7 @@ class ControllerGui:
                         self.ReachedTempBool = True
                         # Start the timer for this step
                         minutesforstep = float(self.ImportPorfile[0][self.StepNumber["text"] - 1])
-                        print(minutesforstep)
+                        print("Waiting %.2f minutes for next step", {minutesforstep} )
                         self.StepEndTime = datetime.datetime.now() + datetime.timedelta(minutes=minutesforstep)
                 except Exception as e:
                     print("Error in reading temperature: ", e)
@@ -1599,11 +1604,18 @@ class ConfigurationGui:
                                          variable=self.enable_error_logger)
         self.chk_error_logger_enable.grid(row=5, column=0, sticky="w", padx=10, pady=5)
         
+
+        self.TittleLabel = tkinter.Label(master, text = "Tittle")
+        self.TittleLabel.grid(row=6,column=0)
+        self.TittleEntry = tkinter.Entry(master, width=25)
+        self.TittleEntry.grid(row=6,column=1)
+        self.TittleEntry.insert(0,TITTLE)
         # Button to save the user configuration
         self.save_button = tkinter.Button(master, text="Save Configuration", command=self.save_configuration)
-        self.save_button.grid(row=6, column=0, columnspan=1, padx=10, pady=10)
+        self.save_button.grid(row=7, column=0, columnspan=1, padx=10, pady=10)
         self.upload_button = tkinter.Button(master, text="Upload Configuration", command=self.upload_configuration)
-        self.upload_button.grid(row=6, column=1, columnspan=2, padx=10, pady=10)
+        self.upload_button.grid(row=7, column=1, columnspan=2, padx=10, pady=10)
+        
         
         
         # This dictionary will hold the configuration after saving.
@@ -1647,7 +1659,8 @@ class ConfigurationGui:
             "DefaultMFC2ComPort": self.DefaultMFC2ComPort.get(),
             "DefaultWatlowComPort": self.DefaultWatlowComPort.get(),
             "DefaultViciComPort": self.DefaultViciComPort.get(),
-            "DefaultNIComPort": self.DefaultNIComPort.get()
+            "DefaultNIComPort": self.DefaultNIComPort.get(),
+            "Tittle" : self.TittleEntry.get()
         }
         
         # For demonstration, print the configuration.
@@ -1693,7 +1706,7 @@ class ConfigurationGui:
                 # Convert boolean values appropriately.
                 if key in ("Have8ComPorts", "HaveWatlow", "HaveDosing", "HaveNITemperature", "EnableErrorLogger",
                            "DefaultMFC1ComPort", "DefaultMFC2ComPort", "DefaultWatlowComPort",
-                           "DefaultViciComPort", "DefaultNIComPort"):
+                           "DefaultViciComPort", "DefaultNIComPort", "Tittle"):
                     print(f"Key: {key}, Value: {value}")
                     new_config[key] = value #in ("true", "1", "yes")
                 elif key == "MFCNames":
@@ -1725,7 +1738,7 @@ if __name__ == "__main__":
     
     # Retrieve configuration from the configuration GUI.
     configuration = config_app.configuration
-    
+    TITTLE = configuration.get('Tittle', TITTLE)
     # Step 2: Initialize your controllers based on the configuration
     DefaultMFC1ComPort = configuration.get('DefaultMFC1ComPort', DefaultMFC1ComPort)
     DefaultMFC2ComPort = configuration.get('DefaultMFC2ComPort', DefaultMFC2ComPort)
