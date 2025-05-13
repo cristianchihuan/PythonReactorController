@@ -26,6 +26,18 @@ v 5.1 Universal Code, Temperature Controller bug fixed.
 v 5.1.2 Added logger option on configuration page
 
 """
+# at the very top of your script, before anything else
+import sys
+if sys.platform == "win32":
+    import ctypes
+
+    # fetch the stdin handle (-10) and current mode
+    hStdin = ctypes.windll.kernel32.GetStdHandle(-10)
+    mode   = ctypes.c_uint()
+    ctypes.windll.kernel32.GetConsoleMode(hStdin, ctypes.byref(mode))
+
+    # clear only the Quick Edit bit (0x40)
+    ctypes.windll.kernel32.SetConsoleMode(hStdin, mode.value & ~0x40)
 # Also install pyserial, serial, pandas, numpy, crcmod, openpyxl
 #import nidaqmx.constants
 import serial
