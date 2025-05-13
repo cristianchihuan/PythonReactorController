@@ -3,6 +3,6 @@
 
 # 2) But un-ignore these files:
 !.gitignore
-!UniversalReactorV5.1.2.py
+!ReactorControlV5.1.2.py
 !requirements.txt
 !Manuals
