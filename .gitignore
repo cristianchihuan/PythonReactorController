@@ -1,0 +1,7 @@
+# 1) Ignore absolutely everything
+*
+
+# 2) But do NOT ignore these files:
+!.gitignore
+!ReactorControlV5.1.2.py
+!requirements.txt
