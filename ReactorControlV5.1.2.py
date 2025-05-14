@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 """
 Created on Wed Jun 23 17:30:55 2021
@@ -96,7 +95,7 @@ while Valid_entry == False :
 '''
 
 ##Begin Settings
-SP_WRITE_DELAY = 0.2
+SP_WRITE_DELAY = 0.3
 TITTLE = "Universal Reactor V5.1.2"
 
 DefaultMFC1ComPort='COM5'
@@ -584,7 +583,7 @@ class NITemperatureConnection:
     def Connect(self, DeviceName=DefaultNIComPort , Channel='ai0'):
         """
         Attempts to create and configure an NI task for the thermocouple.
-        If the device isn’t connected, it logs an error and leaves self.task as None.
+        If the device isn't connected, it logs an error and leaves self.task as None.
         """
         try:
             if self.task is not None:
@@ -662,6 +661,14 @@ class ControllerGui:
         self.master = master
         master.title("Reactor Controller GUI")
 
+        
+        # Add these lines right after master.title
+        default_font = ('TkDefaultFont', 12)  # Increase size from default (usually 9 or 10) to 12
+        self.master.option_add('*Font', default_font)
+        self.master.option_add('*Entry.Font', default_font)
+        self.master.option_add('*Button.Font', default_font)
+        self.master.option_add('*Label.Font', default_font)
+
         # layout master
         master.grid_rowconfigure(0, weight=1)
         master.grid_columnconfigure(0, weight=1)
@@ -676,7 +683,7 @@ class ControllerGui:
 
         # Tab 2: live plots
         self.tab2 = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab2, text="Live Plots")
+        self.notebook.add(self.tab2, text="Snapshoots")
 
         # build each
         self._build_controls(self.tab1)
@@ -735,7 +742,7 @@ class ControllerGui:
             self.profile_container = tkinter.LabelFrame(parent, labelanchor= "n", text="Profile Configuration Values", padx=10, pady=10)   
             self.profile_container.grid(row=2, column=0, columnspan=5, sticky="nsew")  # adjust row/col as needed
 
-            # the canvas on which we’ll put the actual frame
+            # the canvas on which we'll put the actual frame
             self.profile_canvas = tkinter.Canvas(self.profile_container,borderwidth=0,highlightthickness=0)
             # vertical scrollbar hooked to the canvas
             self.profile_vscroll = tkinter.Scrollbar(self.profile_container,orient="vertical",command=self.profile_canvas.yview)
@@ -764,6 +771,7 @@ class ControllerGui:
             self.DelayLabel.grid(row=5, column=0, sticky='e')  # align to the right
             self.DelayEntry = tkinter.Entry(self.GeneralFrame)
             self.DelayEntry.grid(row=5, column=1, sticky='w') # align to the left
+            self.DelayEntry.insert(0,SP_WRITE_DELAY)
             self.UpdateDelayButton = tkinter.Button(self.GeneralFrame, text="Update Delay", command=self.update_sp_write_delay, bg='#90EE90')
             self.UpdateDelayButton.grid(row=6, column=0, columnspan=2, pady=5)
             #self.LoggingEnabled = tkinter.Button(self.GeneralFrame, text = "Enable Logging", command = self.EnableLogging, bg = "#90EE90" ) ### Work in progress
@@ -1018,7 +1026,7 @@ class ControllerGui:
                 print(f"Error uploading graphs {key}: {e}")
                 self.data_buffer[key].append(numpy.nan)
         
-        # keep last 12 points (1 min at 5 s intervals)
+        # keep last 12 points (1 min at 5 s intervals)
         maxlen = 12*60
         if len(self.time_buffer) > maxlen:
             self.time_buffer = self.time_buffer[-maxlen:]
