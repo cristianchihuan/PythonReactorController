@@ -28,6 +28,8 @@ in a standalone function. To minimize nonsence errors, the function will only al
 """
 # at the very top of your script, before anything else
 import sys
+import threading  # Add threading import at the top
+
 if sys.platform == "win32":
     import ctypes
 
@@ -301,17 +303,18 @@ class MFCConnection:
         self.stopbits=stopbits
         self.timeout=timeout
         self.ser=[]     
+        self.lock = threading.Lock()  # Add a threading lock
         
     def Connect(self,port):
         for i in range(3):
             try:
-                #print(port)
-                self.ser = serial.Serial(port, self.baudrate, self.bytesize, self.parity, self.stopbits, self.timeout)
-                time.sleep(0.1)
-                self.ser.isOpen()
-                print("MFC Port Opened")
-                logging.critical("MFC Port Opened %d", i)
-                break
+                with self.lock:  # Use lock when connecting
+                    self.ser = serial.Serial(port, self.baudrate, self.bytesize, self.parity, self.stopbits, self.timeout)
+                    time.sleep(0.1)
+                    self.ser.isOpen()
+                    print("MFC Port Opened")
+                    logging.critical("MFC Port Opened %d", i)
+                    break
             except Exception as e:
                 print("ERROR, MFC port did not open", e)
                 logging.critical("ERROR, MFC port did not open %s", e)
@@ -357,44 +360,43 @@ class MFCConnection:
     #Logging is added for debugging purposes. it is only being used to display values on GUI
     def ReadPV(self, channel):
         try:
-            command = b"".join([b'AZ.', PVChannels[channel-1], b'k\r\n']) # Construct command
-            start_time = time.time()
-            self.ser.write(command)  # Write to the MFC
-            result = self.ser.readline()  # Read the result
-            signal_speed = time.time() - start_time
-            decoded = result.decode('ascii')
-            split = decoded.split(',')
-            if split[0] != 'AZ':
-                raise ValueError("Invalid response from MFC")
-            flowrate = split[5] if len(split) > 5 else None
-            # Group logging into one call
-            logging.debug(
-                "ReadPV , %s, %s ,  %.4f sec , %s, empty ,%s ",
-                flowrate, command, signal_speed, channel, result
-            )
-            return flowrate
+            with self.lock:  # Use lock for reading PV
+                command = b"".join([b'AZ.', PVChannels[channel-1], b'k\r\n']) # Construct command
+                start_time = time.time()
+                self.ser.write(command)  # Write to the MFC
+                result = self.ser.readline()  # Read the result
+                signal_speed = time.time() - start_time
+                decoded = result.decode('ascii')
+                split = decoded.split(',')
+                if split[0] != 'AZ':
+                    raise ValueError("Invalid response from MFC")
+                flowrate = split[5] if len(split) > 5 else None
+                logging.debug(
+                    "ReadPV , %s, %s ,  %.4f sec , %s, empty ,%s ",
+                    flowrate, command, signal_speed, channel, result
+                )
+                return flowrate
         except Exception as e:
             logging.debug("Error in MFC Read PV: %s", e)
             print("Error in MFC Read PV")
     #Logging is added for debugging purposes.
     def ReadSP(self, channel):
         try:
-            # Construct and log the command
-            command = b"".join([b'AZ.', SPChannels[channel-1], b'P1?\r\n'])
-            start_time = time.time()
-            self.ser.write(command)
-            result = self.ser.readline()
-            signal_speed = time.time() - start_time
-            decoded = result.decode('ascii')
-            split = decoded.split(',')
-            sp_value = split[4] if len(split) > 4 else None
-            #SP_error = sp_value - split[5] if len(split) > 5 else None Doesnt work.
-            # Grouped logging for ReadSP
-            logging.debug(
-                "ReadSP ,  %s,  %s,  %.4f sec,  %s, empty, %s",
-                sp_value, command, signal_speed, channel, result
-            )
-            return sp_value    
+            with self.lock:  # Use lock for reading SP
+                # Construct and log the command
+                command = b"".join([b'AZ.', SPChannels[channel-1], b'P1?\r\n'])
+                start_time = time.time()
+                self.ser.write(command)
+                result = self.ser.readline()
+                signal_speed = time.time() - start_time
+                decoded = result.decode('ascii')
+                split = decoded.split(',')
+                sp_value = split[4] if len(split) > 4 else None
+                logging.debug(
+                    "ReadSP ,  %s,  %s,  %.4f sec,  %s, empty, %s",
+                    sp_value, command, signal_speed, channel, result
+                )
+                return sp_value    
         except Exception as e:
             logging.debug("Error in MFC Read SP: %s, %s, %s", e, command, result)
             print("Error in MFC Read SP")         
@@ -404,68 +406,71 @@ class MFCConnection:
         try:
             if isinstance(value, (int, float)):
                 value = "{:.2f}".format(value)
-                value=str(value)
+                value = str(value)
                 logging.debug("WriteSP_Int , %s", value)
+                
             if isinstance(value, str):
-                #IMPORTANT: "P01" change to "P1". We will test how this performs
                 command = b"".join([b'AZ.', SPChannels[channel-1], b'P1=', value.encode('ascii'), b'\r\n'])
-                start_time = time.time()
-                time.sleep(SP_WRITE_DELAY)
-                self.ser.write(command)
-                signal_speed = time.time() - start_time
-                result = self.ser.readlines()
-                print(result)
-                logging.critical(
-                    "WriteSP , %s,  %s ,  %.4f sec ,  %s , empty , %s",
-                    value, command, signal_speed, channel, result 
-                )
-                # Implementing check logic for the raw response from the MFC
-                # This needs to be converted in a standalone function. If the response
-                # has the correct format, but the parameter changed is incorrect, then
-                # trigger an error. The rest of the logic will take care of rewriting the SP
-                # If the SP is not rewritten properly at the end of the function, then trigger an error
-                try:
-                    decoded = result[0].decode('ascii')
-                    print("Made it here")
-                    parts = decoded.split(',')
-                    check_signal_type = parts[2] if len(parts) > 2 else None
-                    print("Check signal type", check_signal_type)
-                    check_command = parts[3] if len(parts) > 3 else None
-                    print("Check command", check_command)
-                    print(type(check_signal_type))
-                    if check_signal_type != '4':
-                        print("Error in response: Invalid signal type")
-                        #error_detected = True  # Set error flag
-                        raise ValueError("Invalid SIGNAL type in MFC response")
-                    if check_command != 'P01':
-                        print("CRITICAL ERROR in MFC Write SP. CHECK OTHER PARAMETERS")
-                        error_detected = True  # Set error flag
-                        raise ValueError("Invalid PARAMETER wrote in MFC response")
-                        
-                except Exception as e:
-                    #error_detected = True  # Set error flag
-                    print(f"Error parsing MFC response: {e}")
-
-                ###########$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
-                #$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
-                SP_MFC = self.ReadSP(channel)
-                if SP_MFC is None:
-                    SP_MFC = self.ReadSP(channel)
-                SP_MFC = float(SP_MFC)
-                for i in range(3):  
-                    if abs(SP_MFC - float(value)) > 0.1:
-                        start_time = time.time()
-                        self.ser.write(command)
-                        time.sleep(SP_WRITE_DELAY)
-                        signal_speed = time.time() - start_time
-                        result = self.ser.readlines()
-                        logging.critical(
-                        "Reattempt_to_Write_SP , %s,  %s ,  %.4f sec ,  %s , empty , %s",
+                
+                # First write operation with lock
+                with self.lock:
+                    start_time = time.time()
+                    time.sleep(SP_WRITE_DELAY)
+                    self.ser.write(command)
+                    signal_speed = time.time() - start_time
+                    result = self.ser.readlines()
+                    #print(result)
+                    logging.critical(
+                        "WriteSP , %s,  %s ,  %.4f sec ,  %s , empty , %s",
                         value, command, signal_speed, channel, result 
                     )
-                    else:
-                        break
-                print(f"Wrote: {value}, to Channel {channel}")    
+                    
+                    try:
+                        decoded = result[0].decode('ascii')
+                        parts = decoded.split(',')
+                        check_signal_type = parts[2] if len(parts) > 2 else None
+                        #print("Check signal type", check_signal_type)
+                        check_command = parts[3] if len(parts) > 3 else None
+                        #print("Check command", check_command)
+                        #print(type(check_signal_type))
+                        if check_signal_type != '4':
+                            print("Error in response: Invalid signal type")
+                            raise ValueError("Invalid SIGNAL type in MFC response")
+                        if check_command != 'P01':
+                            print("CRITICAL ERROR in MFC Write SP. CHECK OTHER PARAMETERS")
+                            error_detected = True  # Set error flag
+                            raise ValueError("Invalid PARAMETER wrote in MFC response")
+                            
+                    except Exception as e:
+                        print(f"Error parsing MFC response: {e}")
+
+                # Release lock before calling ReadSP
+                SP_MFC = self.ReadSP(channel)
+                if SP_MFC is None:
+                    SP_MFC = self.ReadSP(channel)  # Retry once if failed
+                if SP_MFC is not None:  # Only proceed if we got a valid reading
+                    SP_MFC = float(SP_MFC)
+                    for i in range(3):  
+                        if abs(SP_MFC - float(value)) > 0.1:
+                            # Reacquire lock for each write attempt
+                            with self.lock:
+                                start_time = time.time()
+                                self.ser.write(command)
+                                time.sleep(SP_WRITE_DELAY)
+                                signal_speed = time.time() - start_time
+                                result = self.ser.readlines()
+                                logging.critical(
+                                    "Reattempt_to_Write_SP , %s,  %s ,  %.4f sec ,  %s , empty , %s",
+                                    value, command, signal_speed, channel, result 
+                                )
+                            # Release lock and check the result
+                            SP_MFC = self.ReadSP(channel)
+                            if SP_MFC is None:
+                                continue
+                            SP_MFC = float(SP_MFC)
+                        else:
+                            break
+                    print(f"Wrote: {value}, to Channel {channel}")    
 
         except Exception as e:
             error_detected = True  # Set error flag
@@ -474,35 +479,33 @@ class MFCConnection:
         
         return error_detected  # Return the error status
     def ReadSPSignalType(self, channel):
-        """
-        Query the MFC for its SP‐signal‐type code and return a human‐readable string.
-        """
         try:
-            # 1) build and send the query
-            command = b''.join([b'AZ.', SPChannels[channel-1], b'P0?\r\n'])
-            start_time = time.time()
-            self.ser.write(command)
+            with self.lock:  # Use lock for reading SP signal type
+                # 1) build and send the query
+                command = b''.join([b'AZ.', SPChannels[channel-1], b'P0?\r\n'])
+                start_time = time.time()
+                self.ser.write(command)
 
-            # 2) read and decode
-            raw = self.ser.readline()
-            print(raw)
-            result = raw.decode('ascii').strip()
-            elapsed = time.time() - start_time
+                # 2) read and decode
+                raw = self.ser.readline()
+                print(raw)
+                result = raw.decode('ascii').strip()
+                elapsed = time.time() - start_time
 
-            # 3) parse the comma‐sep response
-            parts = result.split(',')
-            code_full = parts[4] if len(parts) > 4 else ''
-            type = code_full[0] if len(code_full) >= 1 else ''
-            print(type)
-            # 4) map to text
-            signal_type = SP_OUTPUT_PORT_SIGNAL_TYPES.get(type, f'Unknown ({type})')
-            print(signal_type)
-            # 5) log and return
-            logging.debug(
-                "ReadSPSignalType, %s , cmd=%s , %.4fs , ch=%d , raw=%s",
-                signal_type, command, elapsed, channel, raw
-            )
-            return signal_type
+                # 3) parse the comma‐sep response
+                parts = result.split(',')
+                code_full = parts[4] if len(parts) > 4 else ''
+                type = code_full[0] if len(code_full) >= 1 else ''
+                print(type)
+                # 4) map to text
+                signal_type = SP_OUTPUT_PORT_SIGNAL_TYPES.get(type, f'Unknown ({type})')
+                print(signal_type)
+                # 5) log and return
+                logging.debug(
+                    "ReadSPSignalType, %s , cmd=%s , %.4fs , ch=%d , raw=%s",
+                    signal_type, command, elapsed, channel, raw
+                )
+                return signal_type
 
         except Exception as e:
             logging.debug("Error in MFC ReadSPSignalType: %s", e)
@@ -510,53 +513,227 @@ class MFCConnection:
             return None
 
     def WriteSPSignalType(self, channel, signal_type):
-        """
-        Write the SP signal type for a given channel.
-        Args:
-            channel: The channel number (1-4)
-            signal_type: The signal type to set (must be one of the values in SP_OUTPUT_PORT_SIGNAL_TYPES)
-        Returns:
-            The new signal type if successful, None if failed
-        """
         try:
-            # 1) Validate the signal type
-            if signal_type not in SP_OUTPUT_PORT_SIGNAL_TYPES.values():
-                raise ValueError(f"Invalid signal type. Must be one of: {list(SP_OUTPUT_PORT_SIGNAL_TYPES.values())}")
+            with self.lock:  # Use lock for writing SP signal type
+                # 1) Validate the signal type
+                if signal_type not in SP_OUTPUT_PORT_SIGNAL_TYPES.values():
+                    raise ValueError(f"Invalid signal type. Must be one of: {list(SP_OUTPUT_PORT_SIGNAL_TYPES.values())}")
 
-            # 2) Find the code for the signal type
-            type_code = None
-            for code, type_str in SP_OUTPUT_PORT_SIGNAL_TYPES.items():
-                if type_str == signal_type:
-                    type_code = code
-                    break
+                # 2) Find the code for the signal type
+                type_code = None
+                for code, type_str in SP_OUTPUT_PORT_SIGNAL_TYPES.items():
+                    if type_str == signal_type:
+                        type_code = code
+                        break
 
-            if type_code is None:
-                raise ValueError("Could not find code for signal type")
-            print("New signal type", type_code)
-            # 3) Build and send the command
-            command = b"".join([b'AZ.', SPChannels[channel-1], b'P0=', type_code.encode('ascii'), b'\r\n'])
-            start_time = time.time()
-            time.sleep(SP_WRITE_DELAY)
-            self.ser.write(command)
-            signal_speed = time.time() - start_time
-            result = self.ser.readlines()
-            print(result)
-            # 4) Log the operation
-            logging.debug("WriteSPSignalType , %s , %s , %.4f sec , %s , empty , %s",
-                signal_type, command, signal_speed, channel, result)
-            # 5) Verify the change by reading back
-            new_type = self.ReadSPSignalType(channel)
-            if new_type != signal_type:
-                logging.critical(
-                    "WriteSPSignalType verification failed. Wanted: %s, Got: %s", signal_type, new_type)
-                return None
+                if type_code is None:
+                    raise ValueError("Could not find code for signal type")
+                print("New signal type", type_code)
+                # 3) Build and send the command
+                command = b"".join([b'AZ.', SPChannels[channel-1], b'P0=', type_code.encode('ascii'), b'\r\n'])
+                start_time = time.time()
+                time.sleep(SP_WRITE_DELAY)
+                self.ser.write(command)
+                signal_speed = time.time() - start_time
+                result = self.ser.readlines()
+                print(result)
+                # 4) Log the operation
+                logging.debug("WriteSPSignalType , %s , %s , %.4f sec , %s , empty , %s",
+                    signal_type, command, signal_speed, channel, result)
+                # 5) Verify the change by reading back
+                new_type = self.ReadSPSignalType(channel)  # This will use its own lock
+                if new_type != signal_type:
+                    logging.critical(
+                        "WriteSPSignalType verification failed. Wanted: %s, Got: %s", signal_type, new_type)
+                    return None
 
-            return new_type
+                return new_type
 
         except Exception as e:
             logging.critical("Error in MFC Write SP Signal Type: %s", e)
             print("Error writing SP signal type")
             return None
+    def ReadSPCONFIG(self, channel):
+        max_retries = 3  # Maximum number of retry attempts
+        for attempt in range(max_retries):
+            try:
+                with self.lock:  # Use lock for reading SP config
+                    command = b"".join([b'AZ.', SPChannels[channel-1], b'v\r\n'])
+                    print("The command sent to read the SP config", command)
+                    start_time = time.time()
+                    self.ser.write(command)
+                    
+                    # Initialize configuration dictionary with only the fields we see in the output
+                    config = {
+                        'SP Signal Type': 'N/A',
+                        'SP Full Scale': 'N/A',
+                        'SP Function': 'N/A',
+                        'SP Rate': 'N/A',
+                        'SP VOR': 'N/A',
+                        'SP Batch': 'N/A',
+                        'SP Blend': 'N/A',
+                        'SP Source': 'N/A'
+                    }
+                    
+                    # Read with timeout until we get all the data or timeout
+                    timeout = time.time() + 5  # 5 second timeout
+                    response_lines = []
+                    while time.time() < timeout:
+                        if self.ser.in_waiting:
+                            line = self.ser.readline().decode('ascii', errors='ignore').strip()
+                            if line:
+                                response_lines.append(line)
+                                
+                                # Parse specific values we're interested in based on the line codes
+                                if '<00>' in line and 'SP Signal Type' in line:  # Signal Type
+                                    parts = line.split()
+                                    config['SP Signal Type'] = parts[-2]
+                                elif '<09>' in line and 'SP Full Scale' in line:  # Full Scale
+                                    parts = line.split()
+                                    if len(parts) > 2:
+                                        config['SP Full Scale'] = f"{parts[-2]} {parts[-1]}"
+                                elif '<02>' in line and 'SP Function' in line:  # SP Function
+                                    parts = line.split()
+                                    config['SP Function'] = parts[-1]
+                                elif '<01>' in line and 'SP Rate' in line:  # SP Rate
+                                    parts = line.split()
+                                    config['SP Rate'] = f"{parts[-2]} {parts[-1]}"
+                                elif '<29>' in line and 'SP VOR' in line:  # SP VOR
+                                    parts = line.split()
+                                    config['SP VOR'] = parts[-1]
+                                elif '<44>' in line and 'SP Batch' in line:  # SP Batch
+                                    parts = line.split()
+                                    config['SP Batch'] = f"{parts[-2]} {parts[-1]}"
+                                elif '<45>' in line and 'SP Blend' in line:  # SP Blend
+                                    parts = line.split()
+                                    config['SP Blend'] = f"{parts[-2]} {parts[-1]}"
+                                elif '<46>' in line and 'SP Source' in line:  # SP Source
+                                    parts = line.split()
+                                    config['SP Source'] = parts[-1]
+                        
+                        # If we've collected enough data, break
+                        if len(response_lines) > 0 and not self.ser.in_waiting:
+                            time.sleep(0.1)  # Small delay to ensure no more data is coming
+                            if not self.ser.in_waiting:
+                                break
+                    
+                    # Check if we got valid data
+                    if all(value == 'N/A' for value in config.values()):
+                        if attempt < max_retries - 1:  # If not the last attempt
+                            print(f"No valid configuration data received on attempt {attempt + 1}, retrying...")
+                            time.sleep(0.5)  # Wait before retry
+                            continue
+                        else:
+                            print("Failed to get valid configuration data after all retries")
+                    
+                    signal_speed = time.time() - start_time
+                    print("The time it took to read the SP config", signal_speed)
+                    
+                    # Log the complete response
+                    logging.debug("ReadSPCONFIG , %s , %s , %.4f sec , %s , empty , %s",
+                        str(config), command, signal_speed, channel, '\n'.join(response_lines))
+                    
+                    return config
+                    
+            except Exception as e:
+                if attempt < max_retries - 1:  # If not the last attempt
+                    print(f"Error reading SP CONFIG on attempt {attempt + 1}, retrying: {str(e)}")
+                    time.sleep(0.5)  # Wait before retry
+                    continue
+                else:
+                    logging.debug("Error in MFC Read SP CONFIG after all retries: %s", e)
+                    print("Error in MFC Read SP CONFIG after all retries")
+                    return None
+
+    def ReadPVCONFIG(self, channel):
+        max_retries = 3  # Maximum number of retry attempts
+        for attempt in range(max_retries):
+            try:
+                command = b"".join([b'AZ.', PVChannels[channel-1], b'v\r\n'])
+                print("The command sent to read the PV config", command)
+                start_time = time.time()
+                self.ser.write(command)
+                
+                # Initialize configuration dictionary with PV-specific fields
+                config = {
+                    'Measure Units': 'N/A',
+                    'Time Base': 'N/A',
+                    'Decimal Point': 'N/A',
+                    'Gas Factor': 'N/A',
+                    'Log Type': 'N/A',
+                    'PV Signal Type': 'N/A',
+                    'PV Full Scale': 'N/A'
+                }
+                
+                # Read with timeout until we get all the data or timeout
+                timeout = time.time() + 5  # 5 second timeout
+                response_lines = []
+                while time.time() < timeout:
+                    if self.ser.in_waiting:
+                        line = self.ser.readline().decode('ascii', errors='ignore').strip()
+                        if line:
+                            #print(f"Received line: {line}")
+                            response_lines.append(line)
+                            
+                            # Parse specific values we're interested in based on the line codes
+                            if '<04>' in line:  # Measure Units
+                                parts = line.split()
+                                config['Measure Units'] = parts[-1]
+                            elif '<10>' in line:  # Time Base
+                                parts = line.split()
+                                config['Time Base'] = parts[-1]
+                            elif '<03>' in line:  # Decimal Point
+                                parts = line.split()
+                                config['Decimal Point'] = parts[-1]
+                            elif '<27>' in line:  # Gas Factor
+                                parts = line.split()
+                                config['Gas Factor'] = parts[-1]
+                            elif '<28>' in line:  # Log Type
+                                parts = line.split()
+                                config['Log Type'] = parts[-1]
+                            elif '<00>' in line and 'PV Signal Type' in line:  # PV Signal Type
+                                parts = line.split()
+                                config['PV Signal Type'] = parts[-2]
+                            elif '<09>' in line and 'PV Full Scale' in line:  # PV Full Scale
+                                parts = line.split()
+                                if len(parts) > 2:
+                                    config['PV Full Scale'] = f"{parts[-2]} {parts[-1]}"
+                    
+                    # If we've collected enough data, break
+                    if len(response_lines) > 0 and not self.ser.in_waiting:
+                        time.sleep(0.1)  # Small delay to ensure no more data is coming
+                        if not self.ser.in_waiting:
+                            break
+                
+                # Check if we got valid data
+                if all(value == 'N/A' for value in config.values()):
+                    if attempt < max_retries - 1:  # If not the last attempt
+                        print(f"No valid configuration data received on attempt {attempt + 1}, retrying...")
+                        time.sleep(0.5)  # Wait before retry
+                        continue
+                    else:
+                        print("Failed to get valid configuration data after all retries")
+                
+                #print(config)
+                signal_speed = time.time() - start_time
+                print("The time it took to read the PV config", signal_speed)
+                
+                # Log the complete response
+                logging.debug("ReadPVCONFIG , %s , %s , %.4f sec , %s , empty , %s",
+                    str(config), command, signal_speed, channel, '\n'.join(response_lines))
+                
+                return config
+                
+            except Exception as e:
+                if attempt < max_retries - 1:  # If not the last attempt
+                    print(f"Error reading PV CONFIG on attempt {attempt + 1}, retrying: {str(e)}")
+                    time.sleep(0.5)  # Wait before retry
+                    continue
+                else:
+                    logging.debug("Error in MFC Read PV CONFIG after all retries: %s", e)
+                    print("Error in MFC Read PV CONFIG after all retries")
+                    return None
+
 # Temperature controller. SImilar structure as the MFC but with different communication protocol
 class WatlowConnection:
     def __init__(self, port='COM4', baudrate=38400, timeout=0.5):
@@ -1195,6 +1372,17 @@ class ControllerGui:
         if HaveDosing:
             time.sleep(0.3)
             Va.Connect(self.ViciComPort.get())
+        
+        # Read MFC configurations after connecting
+        time.sleep(0.3)  # Give devices time to initialize
+        self.read_mfc1_config()     # Read SP config
+        self.read_mfc1_pv_config()  # Read PV config
+        
+        if Have8ComPorts:
+            time.sleep(0.3)
+            self.read_mfc2_config()     # Read SP config
+            self.read_mfc2_pv_config()  # Read PV config
+            
         #Sets the logging location
         if self.LogFile is not None:
             self.LogFile.close()
@@ -1343,8 +1531,9 @@ class ControllerGui:
                 self.StartStop['bg']='red'
                 self.StepNumber["text"]=1
                 self.SkipStepBool=False
-                self.UpdateAllSetPointsInProfile()  
                 self.StepEndTime=datetime.datetime.now()
+                self.UpdateAllSetPointsInProfile()  
+                
                 self.TimeLeft["text"]='Not Reached Temp'
             except:
                 print('Error in profile')
@@ -1512,7 +1701,7 @@ class ControllerGui:
                         print("Waiting %.2f minutes for next step", {minutesforstep} )
                         self.StepEndTime = datetime.datetime.now() + datetime.timedelta(minutes=minutesforstep)
                 except Exception as e:
-                    print("Error in reading temperature: ", e)
+                    print("Error in reading temperature: ", e)      
             
             if self.SkipStepBool or ((datetime.datetime.now() > self.StepEndTime) and self.ReachedTempBool):
                 self.SkipStepBool = False
@@ -1576,7 +1765,7 @@ class ControllerGui:
     def UpdateAllSetPointsInProfile(self):
         for j in range(4):
             channel=j+1
-            ColIndex=j+3
+            ColIndex=j+3 if HaveWatlow else j+1
             value = self.ImportPorfile[ColIndex][self.StepNumber["text"]-1]
             self.MFCInputButton1[j].delete(0,"end")
             self.MFCInputButton1[j].insert(0, value)
@@ -1682,84 +1871,185 @@ class ControllerGui:
 
     def _build_mfc_config(self, parent):
         """Build the MFC configuration tab interface"""
+        # Create a canvas with scrollbar for the entire tab
+        self.config_canvas = tkinter.Canvas(parent)
+        self.config_scrollbar = tkinter.Scrollbar(parent, orient="vertical", command=self.config_canvas.yview)
+        self.config_canvas.configure(yscrollcommand=self.config_scrollbar.set)
+        
+        # Layout scrollbar and canvas
+        self.config_scrollbar.pack(side="right", fill="y")
+        self.config_canvas.pack(side="left", fill="both", expand=True)
+        
+        # Create main frame inside canvas
+        self.config_frame = tkinter.Frame(self.config_canvas)
+        self.config_canvas.create_window((0, 0), window=self.config_frame, anchor="nw")
+
         # Create frames for MFC1 and MFC2 (if enabled)
-        self.mfc1_config_frame = tkinter.LabelFrame(parent, text="MFC 1 Configuration", padx=10, pady=10)
+        self.mfc1_config_frame = tkinter.LabelFrame(self.config_frame, text="MFC 1 Configuration", padx=10, pady=10)
         self.mfc1_config_frame.grid(row=0, column=0, padx=10, pady=10, sticky='nsew')
 
         if Have8ComPorts:
-            self.mfc2_config_frame = tkinter.LabelFrame(parent, text="MFC 2 Configuration", padx=10, pady=10)
+            self.mfc2_config_frame = tkinter.LabelFrame(self.config_frame, text="MFC 2 Configuration", padx=10, pady=10)
             self.mfc2_config_frame.grid(row=0, column=1, padx=10, pady=10, sticky='nsew')
 
         # Create labels and display fields for MFC1
         self.mfc1_signal_labels = {}
         self.mfc1_signal_values = {}
-        self.mfc1_signal_combos = {}  # Add comboboxes for signal type selection
+        self.mfc1_signal_combos = {}
+        self.mfc1_config_values = {}  # New dictionary for SP config values
+        
         for i in range(4):
-            # Channel label
-            label = tkinter.Label(self.mfc1_config_frame, text=f"{self.MFCNames[i]} (Channel {i+1}):")
-            label.grid(row=i, column=0, padx=5, pady=5, sticky='e')
+            # Channel frame
+            channel_frame = tkinter.LabelFrame(self.mfc1_config_frame, text=f"{self.MFCNames[i]} (Channel {i+1})")
+            channel_frame.grid(row=i, column=0, columnspan=4, padx=5, pady=5, sticky='nsew')
             
-            # Signal type value display
-            value_label = tkinter.Label(self.mfc1_config_frame, text="Not Read")
-            value_label.grid(row=i, column=1, padx=5, pady=5, sticky='w')
+            # Create notebook for SP and PV configs
+            config_notebook = ttk.Notebook(channel_frame)
+            config_notebook.grid(row=0, column=0, columnspan=4, padx=5, pady=2, sticky='nsew')
             
-            # Signal type selection combobox
-            combo = ttk.Combobox(self.mfc1_config_frame, values=list(SP_OUTPUT_PORT_SIGNAL_TYPES.values()), width=15)
-            combo.grid(row=i, column=2, padx=5, pady=5)
+            # SP Configuration tab
+            sp_frame = ttk.Frame(config_notebook)
+            config_notebook.add(sp_frame, text='SP Config')
             
-            # Write button
-            write_btn = tkinter.Button(self.mfc1_config_frame, 
-                                     text="Write", 
-                                     command=lambda ch=i+1: self.write_mfc1_signal_type(ch),
-                                     bg='#90EE90')
-            write_btn.grid(row=i, column=3, padx=5, pady=5)
+            self.mfc1_config_values[i] = {}
+            self.mfc1_signal_combos[i] = None  # We'll create it when needed
             
-            self.mfc1_signal_labels[i] = label
-            self.mfc1_signal_values[i] = value_label
+            # First handle SP Signal Type specially with combo box and write button
+            tkinter.Label(sp_frame, text="SP Signal Type:").grid(row=0, column=0, padx=5, pady=2, sticky='e')
+            value_frame = tkinter.Frame(sp_frame)  # Frame to hold both label and combo
+            value_frame.grid(row=0, column=1, padx=5, pady=2, sticky='w')
+            
+            value_label = tkinter.Label(value_frame, text="Not Read")
+            value_label.pack(side='left')
+            self.mfc1_config_values[i]['SP Signal Type'] = value_label
+            
+            combo = ttk.Combobox(value_frame, values=list(SP_OUTPUT_PORT_SIGNAL_TYPES.values()), width=15)
+            combo.pack(side='left', padx=5)
             self.mfc1_signal_combos[i] = combo
+            
+            write_btn = tkinter.Button(value_frame, text="Write", command=lambda ch=i+1: self.write_mfc1_signal_type(ch), bg='#90EE90')
+            write_btn.pack(side='left')
+            
+            # Then handle all other SP config items
+            sp_config_items = ['SP Full Scale', 'SP Function', 'SP Rate', 
+                          'SP VOR', 'SP Batch', 'SP Blend', 'SP Source']
+            for j, item in enumerate(sp_config_items):
+                row = j + 1  # Start after SP Signal Type row
+                tkinter.Label(sp_frame, text=f"{item}:").grid(row=row//2, column=row%2*2, padx=5, pady=2, sticky='e')
+                value_label = tkinter.Label(sp_frame, text="Not Read")
+                value_label.grid(row=row//2, column=row%2*2+1, padx=5, pady=2, sticky='w')
+                self.mfc1_config_values[i][item] = value_label
 
-        # Read button for MFC1
-        self.read_mfc1_button = tkinter.Button(self.mfc1_config_frame, 
-                                             text="Read All Signal Types", 
-                                             command=self.read_mfc1_signal_types,
-                                             bg='#90EE90')
-        self.read_mfc1_button.grid(row=4, column=0, columnspan=4, pady=10)
+            # PV Configuration tab
+            pv_frame = ttk.Frame(config_notebook)
+            config_notebook.add(pv_frame, text='PV Config')
+            
+            # Add PV configuration items
+            pv_config_items = ['Measure Units', 'Time Base', 'Decimal Point', 
+                             'Gas Factor', 'Log Type', 'PV Signal Type', 'PV Full Scale']
+            for j, item in enumerate(pv_config_items):
+                tkinter.Label(pv_frame, text=f"{item}:").grid(row=j//2, column=j%2*2, padx=5, pady=2, sticky='e')
+                value_label = tkinter.Label(pv_frame, text="Not Read")
+                value_label.grid(row=j//2, column=j%2*2+1, padx=5, pady=2, sticky='w')
+                self.mfc1_config_values[i][item] = value_label
+
+            # Read buttons frame
+            button_frame = tkinter.Frame(self.mfc1_config_frame)
+            button_frame.grid(row=4, column=0, columnspan=4, pady=10)
+            
+            self.read_mfc1_sp_config_button = tkinter.Button(button_frame, text="Read SP Config", 
+                                                    command=self.read_mfc1_config, bg='#90EE90')
+            self.read_mfc1_sp_config_button.grid(row=0, column=0, padx=5)
+            
+            self.read_mfc1_pv_config_button = tkinter.Button(button_frame, text="Read PV Config", 
+                                                    command=self.read_mfc1_pv_config, bg='#90EE90')
+            self.read_mfc1_pv_config_button.grid(row=0, column=1, padx=5)
 
         if Have8ComPorts:
-            # Create labels and display fields for MFC2
+            # Similar setup for MFC2
             self.mfc2_signal_labels = {}
             self.mfc2_signal_values = {}
-            self.mfc2_signal_combos = {}  # Add comboboxes for signal type selection
+            self.mfc2_signal_combos = {}
+            self.mfc2_config_values = {}
+            
             for i in range(4):
-                # Channel label
-                label = tkinter.Label(self.mfc2_config_frame, text=f"{self.MFCNames[i+4]} (Channel {i+1}):")
-                label.grid(row=i, column=0, padx=5, pady=5, sticky='e')
+                # Channel frame
+                channel_frame = tkinter.LabelFrame(self.mfc2_config_frame, text=f"{self.MFCNames[i+4]} (Channel {i+1})")
+                channel_frame.grid(row=i, column=0, columnspan=4, padx=5, pady=5, sticky='nsew')
                 
-                # Signal type value display
-                value_label = tkinter.Label(self.mfc2_config_frame, text="Not Read")
-                value_label.grid(row=i, column=1, padx=5, pady=5, sticky='w')
+                # SP Configuration values
+                config_frame = tkinter.Frame(channel_frame)
+                config_frame.grid(row=0, column=0, columnspan=4, padx=5, pady=2)
                 
-                # Signal type selection combobox
-                combo = ttk.Combobox(self.mfc2_config_frame, values=list(SP_OUTPUT_PORT_SIGNAL_TYPES.values()), width=15)
-                combo.grid(row=i, column=2, padx=5, pady=5)
+                self.mfc2_config_values[i] = {}
+                self.mfc2_signal_combos[i] = None  # We'll create it when needed
                 
-                # Write button
-                write_btn = tkinter.Button(self.mfc2_config_frame, 
-                                         text="Write", 
-                                         command=lambda ch=i+1: self.write_mfc2_signal_type(ch),
-                                         bg='#90EE90')
-                write_btn.grid(row=i, column=3, padx=5, pady=5)
+                # First handle SP Signal Type specially with combo box and write button
+                tkinter.Label(config_frame, text="SP Signal Type:").grid(row=0, column=0, padx=5, pady=2, sticky='e')
+                value_frame = tkinter.Frame(config_frame)  # Frame to hold both label and combo
+                value_frame.grid(row=0, column=1, padx=5, pady=2, sticky='w')
                 
-                self.mfc2_signal_labels[i] = label
-                self.mfc2_signal_values[i] = value_label
+                value_label = tkinter.Label(value_frame, text="Not Read")
+                value_label.pack(side='left')
+                self.mfc2_config_values[i]['SP Signal Type'] = value_label
+                
+                combo = ttk.Combobox(value_frame, values=list(SP_OUTPUT_PORT_SIGNAL_TYPES.values()), width=15)
+                combo.pack(side='left', padx=5)
                 self.mfc2_signal_combos[i] = combo
+                
+                write_btn = tkinter.Button(value_frame, text="Write", command=lambda ch=i+1: self.write_mfc2_signal_type(ch), bg='#90EE90')
+                write_btn.pack(side='left')
+                
+                # Then handle all other config items
+                config_items = ['SP Full Scale', 'SP Function', 'SP Rate', 
+                              'SP VOR', 'SP Batch', 'SP Blend', 'SP Source']
+                for j, item in enumerate(config_items):
+                    row = j + 1  # Start after SP Signal Type row
+                    tkinter.Label(config_frame, text=f"{item}:").grid(row=row//2, column=row%2*2, padx=5, pady=2, sticky='e')
+                    value_label = tkinter.Label(config_frame, text="Not Read")
+                    value_label.grid(row=row//2, column=row%2*2+1, padx=5, pady=2, sticky='w')
+                    self.mfc2_config_values[i][item] = value_label
 
-            # Read button for MFC2
-            self.read_mfc2_button = tkinter.Button(self.mfc2_config_frame, 
-                                                 text="Read All Signal Types", 
-                                                 command=self.read_mfc2_signal_types,
-                                                 bg='#90EE90')
-            self.read_mfc2_button.grid(row=4, column=0, columnspan=4, pady=10)
+            # Read buttons for MFC2
+            button_frame = tkinter.Frame(self.mfc2_config_frame)
+            button_frame.grid(row=4, column=0, columnspan=4, pady=10)
+            
+            self.read_mfc2_config_button = tkinter.Button(button_frame, text="Read SP Config", 
+                                                    command=self.read_mfc2_config, bg='#90EE90')
+            self.read_mfc2_config_button.grid(row=0, column=0, padx=5)
+
+        # Configure scrolling
+        self.config_frame.bind("<Configure>", self._on_config_frame_configure)
+
+    def _on_config_frame_configure(self, event):
+        """Handle configuration frame resize"""
+        self.config_canvas.configure(scrollregion=self.config_canvas.bbox("all"))
+
+    def read_mfc1_config(self):
+        """Read and display SP configuration for all channels in MFC1"""
+        for channel in range(1, 5):
+            try:
+                config = Brooks1.ReadSPCONFIG(channel)
+                if config:
+                    for key, value in config.items():
+                        if key != 'Signal Type' and key in self.mfc1_config_values[channel-1]:
+                            self.mfc1_config_values[channel-1][key].config(text=value)
+            except Exception as e:
+                print(f"Error reading SP config for channel {channel}: {str(e)}")
+
+    def read_mfc2_config(self):
+        """Read and display SP configuration for all channels in MFC2"""
+        if not Have8ComPorts:
+            return
+        for channel in range(1, 5):
+            try:
+                config = Brooks2.ReadSPCONFIG(channel)
+                if config:
+                    for key, value in config.items():
+                        if key != 'Signal Type' and key in self.mfc2_config_values[channel-1]:
+                            self.mfc2_config_values[channel-1][key].config(text=value)
+            except Exception as e:
+                print(f"Error reading SP config for channel {channel}: {str(e)}")
 
     def write_mfc1_signal_type(self, channel):
         """Write signal type for a channel in MFC1"""
@@ -1771,10 +2061,13 @@ class ControllerGui:
                 
             new_type = Brooks1.WriteSPSignalType(channel, selected_type)
             if new_type:
-                self.mfc1_signal_values[channel-1].config(text=new_type)
+                self.mfc1_config_values[channel-1]['SP Signal Type'].config(text=new_type)
                 print(f"Successfully wrote signal type {new_type} to channel {channel}")
             else:
                 print(f"Failed to write signal type to channel {channel}")
+        except ValueError:
+            # Ignore ValueError as it's used for normal flow control
+            pass
         except Exception as e:
             print(f"Error writing signal type: {str(e)}")
 
@@ -1820,6 +2113,32 @@ class ControllerGui:
                 self.mfc2_signal_combos[channel-1].set(signal_type)
             except Exception as e:
                 self.mfc2_signal_values[channel-1].config(text=f"Error: {str(e)}")
+
+    def read_mfc1_pv_config(self):
+        """Read and display PV configuration for all channels in MFC1"""
+        for channel in range(1, 5):
+            try:
+                config = Brooks1.ReadPVCONFIG(channel)
+                if config:
+                    for key, value in config.items():
+                        if key in self.mfc1_config_values[channel-1]:
+                            self.mfc1_config_values[channel-1][key].config(text=value)
+            except Exception as e:
+                print(f"Error reading PV config for channel {channel}: {str(e)}")
+
+    def read_mfc2_pv_config(self):
+        """Read and display PV configuration for all channels in MFC2"""
+        if not Have8ComPorts:
+            return
+        for channel in range(1, 5):
+            try:
+                config = Brooks2.ReadPVCONFIG(channel)
+                if config:
+                    for key, value in config.items():
+                        if key in self.mfc2_config_values[channel-1]:
+                            self.mfc2_config_values[channel-1][key].config(text=value)
+            except Exception as e:
+                print(f"Error reading PV config for channel {channel}: {str(e)}")
 
 class ConfigurationGui:
     def __init__(self, master):
