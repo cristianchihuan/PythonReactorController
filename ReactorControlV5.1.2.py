@@ -23,7 +23,8 @@ v 4.3 Added option to specify the channel for the NI device. Fixed bugs with Rea
 v 4.5 Optimized the code and added a few more comments. 04/16/2025 10:45 AM
 v 5.1 Universal Code, Temperature Controller bug fixed. 
 v 5.1.2 Added logger option on configuration page
-
+v 5.1.3 Added a new tab to check and select the SP signal type configuration. Initial logic to check for Brooks feedback. This needs to be wrapped 
+in a standalone function. To minimize nonsence errors, the function will only alarm when the string format is correct, but the parameter is incorrect.
 """
 # at the very top of your script, before anything else
 import sys
@@ -62,7 +63,10 @@ import random
 log_dir = "logs"
 os.makedirs(log_dir, exist_ok=True)
 log_file = os.path.join(log_dir, "Glitch_log_{}.csv".format(time.strftime("%Y-%m-%d_%H-%M-%S")))
-open(log_file, "w").write("Timestamp, b , Line# , Message, Value, Command, Signal_Speed, Channel, SP_Error, raw_response\n")
+# Open log file with UTF-8 encoding
+logging.getLogger('matplotlib').setLevel(logging.CRITICAL)
+logging.getLogger('PIL').setLevel(logging.CRITICAL)
+open(log_file, "w", encoding='utf-8').write("Timestamp, b , Line# , Message, Value, Command, Signal_Speed, Channel, SP_Error, raw_response\n")
 
 ''' Commented out for now, will add back in later
 # Configure logging
@@ -97,7 +101,15 @@ while Valid_entry == False :
 ##Begin Settings
 SP_WRITE_DELAY = 0.3
 TITTLE = "Universal Reactor V5.1.2"
-
+SP_OUTPUT_PORT_SIGNAL_TYPES = {
+    '0': 'Off',
+    '1': '0-20 mA',
+    '2': '4-20 mA',
+    '3': '0-10 V',
+    '4': '2-10 V',
+    '5': '0-5 V',
+    '6': '1-5 V',
+}
 DefaultMFC1ComPort='COM5'
 DefaultMFC2ComPort='COM6'
 DefaultWatlowComPort='COM8'
@@ -388,23 +400,54 @@ class MFCConnection:
             print("Error in MFC Read SP")         
     #Logging is added for debugging purposes. 
     def WriteSP(self, channel, value):
+        error_detected = False  # Add status flag
         try:
-            # Format numeric value if needed
             if isinstance(value, (int, float)):
                 value = "{:.2f}".format(value)
                 value=str(value)
                 logging.debug("WriteSP_Int , %s", value)
             if isinstance(value, str):
-                command = b"".join([b'AZ.', SPChannels[channel-1], b'P01=', value.encode('ascii'), b'\r\n'])
+                #IMPORTANT: "P01" change to "P1". We will test how this performs
+                command = b"".join([b'AZ.', SPChannels[channel-1], b'P1=', value.encode('ascii'), b'\r\n'])
                 start_time = time.time()
                 time.sleep(SP_WRITE_DELAY)
                 self.ser.write(command)
                 signal_speed = time.time() - start_time
                 result = self.ser.readlines()
+                print(result)
                 logging.critical(
                     "WriteSP , %s,  %s ,  %.4f sec ,  %s , empty , %s",
                     value, command, signal_speed, channel, result 
                 )
+                # Implementing check logic for the raw response from the MFC
+                # This needs to be converted in a standalone function. If the response
+                # has the correct format, but the parameter changed is incorrect, then
+                # trigger an error. The rest of the logic will take care of rewriting the SP
+                # If the SP is not rewritten properly at the end of the function, then trigger an error
+                try:
+                    decoded = result[0].decode('ascii')
+                    print("Made it here")
+                    parts = decoded.split(',')
+                    check_signal_type = parts[2] if len(parts) > 2 else None
+                    print("Check signal type", check_signal_type)
+                    check_command = parts[3] if len(parts) > 3 else None
+                    print("Check command", check_command)
+                    print(type(check_signal_type))
+                    if check_signal_type != '4':
+                        print("Error in response: Invalid signal type")
+                        #error_detected = True  # Set error flag
+                        raise ValueError("Invalid SIGNAL type in MFC response")
+                    if check_command != 'P01':
+                        print("CRITICAL ERROR in MFC Write SP. CHECK OTHER PARAMETERS")
+                        error_detected = True  # Set error flag
+                        raise ValueError("Invalid PARAMETER wrote in MFC response")
+                        
+                except Exception as e:
+                    #error_detected = True  # Set error flag
+                    print(f"Error parsing MFC response: {e}")
+
+                ###########$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
+                #$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
                 SP_MFC = self.ReadSP(channel)
                 if SP_MFC is None:
                     SP_MFC = self.ReadSP(channel)
@@ -424,11 +467,96 @@ class MFCConnection:
                         break
                 print(f"Wrote: {value}, to Channel {channel}")    
 
-
         except Exception as e:
+            error_detected = True  # Set error flag
             logging.critical("Error in MFC Write SP: %s", e )
             print("Error in MFC Write SP")
+        
+        return error_detected  # Return the error status
+    def ReadSPSignalType(self, channel):
+        """
+        Query the MFC for its SP‐signal‐type code and return a human‐readable string.
+        """
+        try:
+            # 1) build and send the query
+            command = b''.join([b'AZ.', SPChannels[channel-1], b'P0?\r\n'])
+            start_time = time.time()
+            self.ser.write(command)
 
+            # 2) read and decode
+            raw = self.ser.readline()
+            print(raw)
+            result = raw.decode('ascii').strip()
+            elapsed = time.time() - start_time
+
+            # 3) parse the comma‐sep response
+            parts = result.split(',')
+            code_full = parts[4] if len(parts) > 4 else ''
+            type = code_full[0] if len(code_full) >= 1 else ''
+            print(type)
+            # 4) map to text
+            signal_type = SP_OUTPUT_PORT_SIGNAL_TYPES.get(type, f'Unknown ({type})')
+            print(signal_type)
+            # 5) log and return
+            logging.debug(
+                "ReadSPSignalType, %s , cmd=%s , %.4fs , ch=%d , raw=%s",
+                signal_type, command, elapsed, channel, raw
+            )
+            return signal_type
+
+        except Exception as e:
+            logging.debug("Error in MFC ReadSPSignalType: %s", e)
+            print("Error reading SP signal type")
+            return None
+
+    def WriteSPSignalType(self, channel, signal_type):
+        """
+        Write the SP signal type for a given channel.
+        Args:
+            channel: The channel number (1-4)
+            signal_type: The signal type to set (must be one of the values in SP_OUTPUT_PORT_SIGNAL_TYPES)
+        Returns:
+            The new signal type if successful, None if failed
+        """
+        try:
+            # 1) Validate the signal type
+            if signal_type not in SP_OUTPUT_PORT_SIGNAL_TYPES.values():
+                raise ValueError(f"Invalid signal type. Must be one of: {list(SP_OUTPUT_PORT_SIGNAL_TYPES.values())}")
+
+            # 2) Find the code for the signal type
+            type_code = None
+            for code, type_str in SP_OUTPUT_PORT_SIGNAL_TYPES.items():
+                if type_str == signal_type:
+                    type_code = code
+                    break
+
+            if type_code is None:
+                raise ValueError("Could not find code for signal type")
+            print("New signal type", type_code)
+            # 3) Build and send the command
+            command = b"".join([b'AZ.', SPChannels[channel-1], b'P0=', type_code.encode('ascii'), b'\r\n'])
+            start_time = time.time()
+            time.sleep(SP_WRITE_DELAY)
+            self.ser.write(command)
+            signal_speed = time.time() - start_time
+            result = self.ser.readlines()
+            print(result)
+            # 4) Log the operation
+            logging.debug("WriteSPSignalType , %s , %s , %.4f sec , %s , empty , %s",
+                signal_type, command, signal_speed, channel, result)
+            # 5) Verify the change by reading back
+            new_type = self.ReadSPSignalType(channel)
+            if new_type != signal_type:
+                logging.critical(
+                    "WriteSPSignalType verification failed. Wanted: %s, Got: %s", signal_type, new_type)
+                return None
+
+            return new_type
+
+        except Exception as e:
+            logging.critical("Error in MFC Write SP Signal Type: %s", e)
+            print("Error writing SP signal type")
+            return None
 # Temperature controller. SImilar structure as the MFC but with different communication protocol
 class WatlowConnection:
     def __init__(self, port='COM4', baudrate=38400, timeout=0.5):
@@ -661,7 +789,6 @@ class ControllerGui:
         self.master = master
         master.title("Reactor Controller GUI")
 
-        
         # Add these lines right after master.title
         default_font = ('TkDefaultFont', 12)  # Increase size from default (usually 9 or 10) to 12
         self.master.option_add('*Font', default_font)
@@ -673,7 +800,7 @@ class ControllerGui:
         master.grid_rowconfigure(0, weight=1)
         master.grid_columnconfigure(0, weight=1)
 
-        # notebook with two tabs
+        # notebook with three tabs
         self.notebook = ttk.Notebook(master)
         self.notebook.grid(row=0, column=0, sticky='nsew')
 
@@ -685,9 +812,14 @@ class ControllerGui:
         self.tab2 = ttk.Frame(self.notebook)
         self.notebook.add(self.tab2, text="Snapshoots")
 
+        # Tab 3: MFC Configuration
+        self.tab3 = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab3, text="MFC Config")
+
         # build each
         self._build_controls(self.tab1)
         self._build_plots(self.tab2)
+        self._build_mfc_config(self.tab3)
 
         # start periodic tasks
         #self.master.after(0, self.ReadPVs)
@@ -1137,27 +1269,42 @@ class ControllerGui:
             Va.CloseConnection()
             #close pressure
         self.master.destroy()
-    def WriteMFCSPButton1(self,channel):
+    def WriteMFCSPButton1(self, channel):
         MFCValue = self.MFCInputButton1[channel-1].get()
         try: 
             MFCValue = float(MFCValue)         
-            Brooks1.WriteSP(channel,MFCValue)
-            #Lets add logic to Detect glitches
+            error_status = Brooks1.WriteSP(channel, MFCValue)  # Get error status
+            
+            # Update the display color based on error status
+            if error_status:
+                self.ReadFlowPart1[channel-1].config(bg='red')  # Highlight in red if error
+            else:
+                self.ReadFlowPart1[channel-1].config(bg='SystemButtonFace')  # Reset to default color
+            
+            # Lets add logic to Detect glitches
             MFC_SP = Brooks1.ReadSP(channel)
             SP_error = MFCValue - float(MFC_SP)
-            logging.critical("SP_Error,  %s , %.2f, empty, %s", SP_error, SP_WRITE_DELAY,   channel)
+            logging.critical("SP_Error,  %s , %.2f, empty, %s", SP_error, SP_WRITE_DELAY, channel)
         except:
             print("ERROR in Write MFC SP, probably not a number")
+            self.ReadFlowPart1[channel-1].config(bg='red')  # Highlight in red if error
 
     if Have8ComPorts:
-        print("Function for MFC2 Defined")     
-        def WriteMFCSPButton2(self,channel):
+        def WriteMFCSPButton2(self, channel):
             MFCValue = self.MFCInputButton2[channel-1].get()
             try: 
                 MFCValue = float(MFCValue)         
-                Brooks2.WriteSP(channel,MFCValue)
+                error_status = Brooks2.WriteSP(channel, MFCValue)  # Get error status
+                
+                # Update the display color based on error status
+                if error_status:
+                    self.ReadFlowPart2[channel-1].config(bg='red')  # Highlight in red if error
+                else:
+                    self.ReadFlowPart2[channel-1].config(bg='SystemButtonFace')  # Reset to default color
+                
             except:
                 print("ERROR in Write MFC SP, probably not a number")
+                self.ReadFlowPart2[channel-1].config(bg='red')  # Highlight in red if error
             
     if HaveWatlow:
         def WriteTempSPButton(self):
@@ -1533,6 +1680,147 @@ class ControllerGui:
         self.DoseNumber["text"]="Not Dosing"
         self.DoseTimeLeft["text"]='N/A'
 
+    def _build_mfc_config(self, parent):
+        """Build the MFC configuration tab interface"""
+        # Create frames for MFC1 and MFC2 (if enabled)
+        self.mfc1_config_frame = tkinter.LabelFrame(parent, text="MFC 1 Configuration", padx=10, pady=10)
+        self.mfc1_config_frame.grid(row=0, column=0, padx=10, pady=10, sticky='nsew')
+
+        if Have8ComPorts:
+            self.mfc2_config_frame = tkinter.LabelFrame(parent, text="MFC 2 Configuration", padx=10, pady=10)
+            self.mfc2_config_frame.grid(row=0, column=1, padx=10, pady=10, sticky='nsew')
+
+        # Create labels and display fields for MFC1
+        self.mfc1_signal_labels = {}
+        self.mfc1_signal_values = {}
+        self.mfc1_signal_combos = {}  # Add comboboxes for signal type selection
+        for i in range(4):
+            # Channel label
+            label = tkinter.Label(self.mfc1_config_frame, text=f"{self.MFCNames[i]} (Channel {i+1}):")
+            label.grid(row=i, column=0, padx=5, pady=5, sticky='e')
+            
+            # Signal type value display
+            value_label = tkinter.Label(self.mfc1_config_frame, text="Not Read")
+            value_label.grid(row=i, column=1, padx=5, pady=5, sticky='w')
+            
+            # Signal type selection combobox
+            combo = ttk.Combobox(self.mfc1_config_frame, values=list(SP_OUTPUT_PORT_SIGNAL_TYPES.values()), width=15)
+            combo.grid(row=i, column=2, padx=5, pady=5)
+            
+            # Write button
+            write_btn = tkinter.Button(self.mfc1_config_frame, 
+                                     text="Write", 
+                                     command=lambda ch=i+1: self.write_mfc1_signal_type(ch),
+                                     bg='#90EE90')
+            write_btn.grid(row=i, column=3, padx=5, pady=5)
+            
+            self.mfc1_signal_labels[i] = label
+            self.mfc1_signal_values[i] = value_label
+            self.mfc1_signal_combos[i] = combo
+
+        # Read button for MFC1
+        self.read_mfc1_button = tkinter.Button(self.mfc1_config_frame, 
+                                             text="Read All Signal Types", 
+                                             command=self.read_mfc1_signal_types,
+                                             bg='#90EE90')
+        self.read_mfc1_button.grid(row=4, column=0, columnspan=4, pady=10)
+
+        if Have8ComPorts:
+            # Create labels and display fields for MFC2
+            self.mfc2_signal_labels = {}
+            self.mfc2_signal_values = {}
+            self.mfc2_signal_combos = {}  # Add comboboxes for signal type selection
+            for i in range(4):
+                # Channel label
+                label = tkinter.Label(self.mfc2_config_frame, text=f"{self.MFCNames[i+4]} (Channel {i+1}):")
+                label.grid(row=i, column=0, padx=5, pady=5, sticky='e')
+                
+                # Signal type value display
+                value_label = tkinter.Label(self.mfc2_config_frame, text="Not Read")
+                value_label.grid(row=i, column=1, padx=5, pady=5, sticky='w')
+                
+                # Signal type selection combobox
+                combo = ttk.Combobox(self.mfc2_config_frame, values=list(SP_OUTPUT_PORT_SIGNAL_TYPES.values()), width=15)
+                combo.grid(row=i, column=2, padx=5, pady=5)
+                
+                # Write button
+                write_btn = tkinter.Button(self.mfc2_config_frame, 
+                                         text="Write", 
+                                         command=lambda ch=i+1: self.write_mfc2_signal_type(ch),
+                                         bg='#90EE90')
+                write_btn.grid(row=i, column=3, padx=5, pady=5)
+                
+                self.mfc2_signal_labels[i] = label
+                self.mfc2_signal_values[i] = value_label
+                self.mfc2_signal_combos[i] = combo
+
+            # Read button for MFC2
+            self.read_mfc2_button = tkinter.Button(self.mfc2_config_frame, 
+                                                 text="Read All Signal Types", 
+                                                 command=self.read_mfc2_signal_types,
+                                                 bg='#90EE90')
+            self.read_mfc2_button.grid(row=4, column=0, columnspan=4, pady=10)
+
+    def write_mfc1_signal_type(self, channel):
+        """Write signal type for a channel in MFC1"""
+        try:
+            selected_type = self.mfc1_signal_combos[channel-1].get()
+            if not selected_type:
+                print("Please select a signal type first")
+                return
+                
+            new_type = Brooks1.WriteSPSignalType(channel, selected_type)
+            if new_type:
+                self.mfc1_signal_values[channel-1].config(text=new_type)
+                print(f"Successfully wrote signal type {new_type} to channel {channel}")
+            else:
+                print(f"Failed to write signal type to channel {channel}")
+        except Exception as e:
+            print(f"Error writing signal type: {str(e)}")
+
+    def write_mfc2_signal_type(self, channel):
+        """Write signal type for a channel in MFC2"""
+        if not Have8ComPorts:
+            return
+        try:
+            selected_type = self.mfc2_signal_combos[channel-1].get()
+            if not selected_type:
+                print("Please select a signal type first")
+                return
+                
+            new_type = Brooks2.WriteSPSignalType(channel, selected_type)
+            if new_type:
+                self.mfc2_signal_values[channel-1].config(text=new_type)
+                print(f"Successfully wrote signal type {new_type} to channel {channel}")
+            else:
+                print(f"Failed to write signal type to channel {channel}")
+        except Exception as e:
+            print(f"Error writing signal type: {str(e)}")
+
+    def read_mfc1_signal_types(self):
+        """Read and display signal types for all channels in MFC1"""
+        for channel in range(1, 5):
+            try:
+                signal_type = Brooks1.ReadSPSignalType(channel)
+                self.mfc1_signal_values[channel-1].config(text=signal_type)
+                # Also update the combobox selection
+                self.mfc1_signal_combos[channel-1].set(signal_type)
+            except Exception as e:
+                self.mfc1_signal_values[channel-1].config(text=f"Error: {str(e)}")
+
+    def read_mfc2_signal_types(self):
+        """Read and display signal types for all channels in MFC2"""
+        if not Have8ComPorts:
+            return
+        for channel in range(1, 5):
+            try:
+                signal_type = Brooks2.ReadSPSignalType(channel)
+                self.mfc2_signal_values[channel-1].config(text=signal_type)
+                # Also update the combobox selection
+                self.mfc2_signal_combos[channel-1].set(signal_type)
+            except Exception as e:
+                self.mfc2_signal_values[channel-1].config(text=f"Error: {str(e)}")
+
 class ConfigurationGui:
     def __init__(self, master):
         self.master = master
@@ -1781,19 +2069,19 @@ if __name__ == "__main__":
         HaveNITemperature = False
     if configuration["EnableErrorLogger"].lower() == "true":
         print("logger level set to DEBUG")
-        new_level =logging.DEBUG
+        new_level = logging.DEBUG
     else:
         print("logger level set to CRITICAL")
         new_level = logging.CRITICAL
 
+    # Configure logging with UTF-8 encoding
     logging.basicConfig(
-        level= new_level,  # Log only CRITICAL messages
+        level=new_level,
         format="%(asctime)s,%(lineno)d, %(message)s",
         handlers=[
-            #logging.StreamHandler(),  # Log to console
-            logging.FileHandler(log_file)  # Log to file
+            logging.FileHandler(log_file, encoding='utf-8')  # Add UTF-8 encoding
         ]
-        )
+    )
     
     # Step 3: Launch main Controller GUI
     main_root = tkinter.Tk()
