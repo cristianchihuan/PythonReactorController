@@ -295,13 +295,15 @@ class DosingValve:
             print("ERROR in SetToStateB", e)
 #See information on the 0254 unit for the read/write of the serial port. This should be in the shared drive
 class MFCConnection:
-    def __init__(self, port='COM3', baudrate=9600, bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE, timeout=2):
+    def __init__(self, port='COM3', baudrate=9600, bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE, timeout=2,
+                 write_timeout=2):
         self.port=port
         self.baudrate=baudrate
         self.bytesize=bytesize
         self.parity=parity
         self.stopbits=stopbits
         self.timeout=timeout
+        self.write_timeout=write_timeout
         self.ser=[]     
         self.lock = threading.Lock()  # Add a threading lock
         
@@ -309,7 +311,7 @@ class MFCConnection:
         for i in range(3):
             try:
                 with self.lock:  # Use lock when connecting
-                    self.ser = serial.Serial(port, self.baudrate, self.bytesize, self.parity, self.stopbits, self.timeout)
+                    self.ser = serial.Serial(port, self.baudrate, self.bytesize, self.parity, self.stopbits, self.timeout, self.write_timeout)
                     time.sleep(0.1)
                     self.ser.isOpen()
                     print("MFC Port Opened")
@@ -1481,11 +1483,25 @@ class ControllerGui:
             MFCValue = float(MFCValue)         
             error_status = Brooks1.WriteSP(channel, MFCValue)  # Get error status
             
-            # Update the display color based on error status
+            # Update the display color and tooltip based on error status
             if error_status:
                 self.ReadFlowPart1[channel-1].config(bg='red')  # Highlight in red if error
+                # Create tooltip for error
+                tooltip_text = f"Error writing setpoint {MFCValue} to channel {channel}\nCHECK SP SIGNAL TYPE IN MFC CONFIGURATION"
+                self.ReadFlowPart1[channel-1].bind('<Enter>', lambda e, text=tooltip_text: self.show_tooltip(e, text))
+                self.ReadFlowPart1[channel-1].bind('<Leave>', self.hide_tooltip)
+                
+                # Log error to CSV file
+                now = datetime.datetime.now()
+                error_row = [now.strftime("%m/%d/%y %H:%M:%S"), "ERROR", "N/A", 
+                           f"MFC1 Channel {channel} Setpoint Write Error", 
+                           f"Attempted Value: {MFCValue}"]
+                self.File.writerow(error_row)
             else:
                 self.ReadFlowPart1[channel-1].config(bg='SystemButtonFace')  # Reset to default color
+                # Remove tooltip bindings if they exist
+                self.ReadFlowPart1[channel-1].unbind('<Enter>')
+                self.ReadFlowPart1[channel-1].unbind('<Leave>')
             
             # Lets add logic to Detect glitches
             MFC_SP = Brooks1.ReadSP(channel)
@@ -1493,7 +1509,18 @@ class ControllerGui:
             logging.critical("SP_Error,  %s , %.2f, empty, %s", SP_error, SP_WRITE_DELAY, channel)
         except:
             print("ERROR in Write MFC SP, probably not a number")
-            self.ReadFlowPart1[channel-1].config(bg='red')  # Highlight in red if error
+            self.ReadFlowPart1[channel-1].config(bg='yellow')  # Highlight in red if error
+            # Create tooltip for invalid input error
+            tooltip_text = f"Invalid input value: {MFCValue}"
+            self.ReadFlowPart1[channel-1].bind('<Enter>', lambda e, text=tooltip_text: self.show_tooltip(e, text))
+            self.ReadFlowPart1[channel-1].bind('<Leave>', self.hide_tooltip)
+            
+            # Log error to CSV file
+            now = datetime.datetime.now()
+            error_row = [now.strftime("%m/%d/%y %H:%M:%S"), "ERROR", "N/A", 
+                       f"MFC1 Channel {channel} Invalid Input", 
+                       f"Invalid Value: {MFCValue}"]
+            self.File.writerow(error_row)
 
     if Have8ComPorts:
         def WriteMFCSPButton2(self, channel):
@@ -1502,16 +1529,64 @@ class ControllerGui:
                 MFCValue = float(MFCValue)         
                 error_status = Brooks2.WriteSP(channel, MFCValue)  # Get error status
                 
-                # Update the display color based on error status
+                # Update the display color and tooltip based on error status
                 if error_status:
                     self.ReadFlowPart2[channel-1].config(bg='red')  # Highlight in red if error
+                    # Create tooltip for error
+                    tooltip_text = f"Error writing setpoint {MFCValue} to channel {channel}"
+                    self.ReadFlowPart2[channel-1].bind('<Enter>', lambda e, text=tooltip_text: self.show_tooltip(e, text))
+                    self.ReadFlowPart2[channel-1].bind('<Leave>', self.hide_tooltip)
+                    
+                    # Log error to CSV file
+                    now = datetime.datetime.now()
+                    error_row = [now.strftime("%m/%d/%y %H:%M:%S"), "ERROR", "N/A", 
+                               f"MFC2 Channel {channel} Setpoint Write Error", 
+                               f"Attempted Value: {MFCValue}"]
+                    self.File.writerow(error_row)
                 else:
                     self.ReadFlowPart2[channel-1].config(bg='SystemButtonFace')  # Reset to default color
+                    # Remove tooltip bindings if they exist
+                    self.ReadFlowPart2[channel-1].unbind('<Enter>')
+                    self.ReadFlowPart2[channel-1].unbind('<Leave>')
                 
             except:
                 print("ERROR in Write MFC SP, probably not a number")
                 self.ReadFlowPart2[channel-1].config(bg='red')  # Highlight in red if error
-            
+                # Create tooltip for invalid input error
+                tooltip_text = f"Invalid input value: {MFCValue}"
+                self.ReadFlowPart2[channel-1].bind('<Enter>', lambda e, text=tooltip_text: self.show_tooltip(e, text))
+                self.ReadFlowPart2[channel-1].bind('<Leave>', self.hide_tooltip)
+                
+                # Log error to CSV file
+                now = datetime.datetime.now()
+                error_row = [now.strftime("%m/%d/%y %H:%M:%S"), "ERROR", "N/A", 
+                           f"MFC2 Channel {channel} Invalid Input", 
+                           f"Invalid Value: {MFCValue}"]
+                self.File.writerow(error_row)
+
+    def show_tooltip(self, event, text):
+        """Create a tooltip for a given widget"""
+        widget = event.widget
+        x, y, _, _ = widget.bbox("insert")
+        x += widget.winfo_rootx() + 25
+        y += widget.winfo_rooty() + 25
+        
+        # Create a toplevel window
+        self.tooltip = tkinter.Toplevel(widget)
+        # Leaves only the label and removes the app window
+        self.tooltip.wm_overrideredirect(True)
+        self.tooltip.wm_geometry(f"+{x}+{y}")
+        
+        label = tkinter.Label(self.tooltip, text=text, justify='left',
+                            background="#ffffe0", relief='solid', borderwidth=1,
+                            font=("tahoma", "8", "normal"))
+        label.pack(ipadx=1)
+
+    def hide_tooltip(self, event):
+        """Hide the tooltip"""
+        if hasattr(self, 'tooltip'):
+            self.tooltip.destroy()
+
     if HaveWatlow:
         def WriteTempSPButton(self):
             Tvalue = self.TempInputButton.get()
