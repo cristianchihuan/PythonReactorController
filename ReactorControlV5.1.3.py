@@ -535,7 +535,7 @@ class MFCConnection:
             # 3) Build and send the command
             print(type_code)
             print(type_code.encode('ascii'))
-            command = b"".join([b'AZ.', SPChannels[channel-1], b'P0=', type_code.encode('ascii'), b'\r\n'])
+            command = b"".join([b'AZ.', SPChannels[channel-1], b'P0=', type_code.encode('ascii'),PVChannels[channel-1], b'\r\n'])
             print("The command sent to write the SP signal type", command)
             # Write operation with lock
             with self.lock:
