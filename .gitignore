@@ -4,5 +4,6 @@
 # 2) But un-ignore these files:
 !.gitignore
 !ReactorControlV5.1.2.py
+!ReactorControlV5.1.3.py
 !requirements.txt
 !Manuals

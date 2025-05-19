@@ -359,6 +359,7 @@ class MFCConnection:
 
     #Logging is added for debugging purposes. it is only being used to display values on GUI
     def ReadPV(self, channel):
+        #print(self.lock)
         try:
             with self.lock:  # Use lock for reading PV
                 command = b"".join([b'AZ.', PVChannels[channel-1], b'k\r\n']) # Construct command
@@ -517,11 +518,13 @@ class MFCConnection:
             # 1) Validate the signal type
             if signal_type not in SP_OUTPUT_PORT_SIGNAL_TYPES.values():
                 raise ValueError(f"Invalid signal type. Must be one of: {list(SP_OUTPUT_PORT_SIGNAL_TYPES.values())}")
-
+            print(signal_type  )
             # 2) Find the code for the signal type
             type_code = None
             for code, type_str in SP_OUTPUT_PORT_SIGNAL_TYPES.items():
+                print( code, type_str , signal_type)
                 if type_str == signal_type:
+                    
                     type_code = code
                     break
 
@@ -530,8 +533,10 @@ class MFCConnection:
             print("New signal type", type_code)
             
             # 3) Build and send the command
+            print(type_code)
+            print(type_code.encode('ascii'))
             command = b"".join([b'AZ.', SPChannels[channel-1], b'P0=', type_code.encode('ascii'), b'\r\n'])
-            
+            print("The command sent to write the SP signal type", command)
             # Write operation with lock
             with self.lock:
                 start_time = time.time()
@@ -539,6 +544,7 @@ class MFCConnection:
                 self.ser.write(command)
                 signal_speed = time.time() - start_time
                 result = self.ser.readlines()
+                print("WRITE SP SIGNAL TYPE",result)
                 # 4) Log the operation
                 logging.debug("WriteSPSignalType , %s , %s , %.4f sec , %s , empty , %s",
                     signal_type, command, signal_speed, channel, result)
@@ -945,7 +951,7 @@ class NITemperatureConnection:
             logging.critical("NI thermocouple connection is good. Temperature: %.2f °C", temperature)
             return True
         else:
-            logging.critical("NI thermocouple connection test failed." )
+            logging.critical("NI thermocouple connection test failed.")
             return False
 
     def Close(self):
@@ -970,7 +976,7 @@ class ControllerGui:
         master.title("Reactor Controller GUI")
 
         # Add these lines right after master.title
-        default_font = ('TkDefaultFont', 12)  # Increase size from default (usually 9 or 10) to 12
+        default_font = ('TkDefaultFont', 10)  # Increase size from default (usually 9 or 10) to 12
         self.master.option_add('*Font', default_font)
         self.master.option_add('*Entry.Font', default_font)
         self.master.option_add('*Button.Font', default_font)
@@ -1197,6 +1203,14 @@ class ControllerGui:
             self.SkipStep = tkinter.Button(self.ProfileControlFrame, text="Skip Step", command=self.SkipStep)
             self.SkipStep.grid(row=4,column=0,columnspan=2) 
 
+            # Add new UI elements for moving to specific step
+            self.GoToStepLabel = tkinter.Label(self.ProfileControlFrame, text="Go to Step:")
+            self.GoToStepLabel.grid(row=5,column=0)
+            self.GoToStepEntry = tkinter.Entry(self.ProfileControlFrame, width=5)
+            self.GoToStepEntry.grid(row=5,column=1)
+            self.GoToStepButton = tkinter.Button(self.ProfileControlFrame, text="Go", command=self.GoToStep, bg='#90EE90')
+            self.GoToStepButton.grid(row=6,column=0,columnspan=2)
+
             if HaveDosing:
                 #Vici Part
                 self.ViciComPortLabel = tkinter.Label(self.DosingValveFrame, text = "Com Port")
@@ -1412,6 +1426,7 @@ class ControllerGui:
             TitleRow.append('NI Temperature (\N{DEGREE SIGN}C)')
         self.File.writerow(TitleRow)   
         #Starts the logging part
+        time.sleep(0.5)
         self.ReadPVs()
     def update_sp_write_delay(self):
         """Reads the user input, validates it, and updates the global SP_WRITE_DELAY."""
@@ -1708,7 +1723,7 @@ class ControllerGui:
             
             if self.SkipStepBool or ((datetime.datetime.now() > self.StepEndTime) and self.ReachedTempBool):
                 self.SkipStepBool = False
-                print('Moving to Next Step')
+                print('Moving to Next Step :', self.StepNumber["text"] )
                 try:
                     self.StepNumber["text"] = self.StepNumber["text"] + 1
                     self.UpdateAllSetPointsInProfile()
@@ -1980,16 +1995,20 @@ class ControllerGui:
                 channel_frame = tkinter.LabelFrame(self.mfc2_config_frame, text=f"{self.MFCNames[i+4]} (Channel {i+1})")
                 channel_frame.grid(row=i, column=0, columnspan=4, padx=5, pady=5, sticky='nsew')
                 
-                # SP Configuration values
-                config_frame = tkinter.Frame(channel_frame)
-                config_frame.grid(row=0, column=0, columnspan=4, padx=5, pady=2)
+                # Create notebook for SP and PV configs
+                config_notebook = ttk.Notebook(channel_frame)
+                config_notebook.grid(row=0, column=0, columnspan=4, padx=5, pady=2, sticky='nsew')
+                
+                # SP Configuration tab
+                sp_frame = ttk.Frame(config_notebook)
+                config_notebook.add(sp_frame, text='SP Config')
                 
                 self.mfc2_config_values[i] = {}
                 self.mfc2_signal_combos[i] = None  # We'll create it when needed
                 
                 # First handle SP Signal Type specially with combo box and write button
-                tkinter.Label(config_frame, text="SP Signal Type:").grid(row=0, column=0, padx=5, pady=2, sticky='e')
-                value_frame = tkinter.Frame(config_frame)  # Frame to hold both label and combo
+                tkinter.Label(sp_frame, text="SP Signal Type:").grid(row=0, column=0, padx=5, pady=2, sticky='e')
+                value_frame = tkinter.Frame(sp_frame)  # Frame to hold both label and combo
                 value_frame.grid(row=0, column=1, padx=5, pady=2, sticky='w')
                 
                 value_label = tkinter.Label(value_frame, text="Not Read")
@@ -2003,14 +2022,27 @@ class ControllerGui:
                 write_btn = tkinter.Button(value_frame, text="Write", command=lambda ch=i+1: self.write_mfc2_signal_type(ch), bg='#90EE90')
                 write_btn.pack(side='left')
                 
-                # Then handle all other config items
-                config_items = ['SP Full Scale', 'SP Function', 'SP Rate', 
+                # Then handle all other SP config items
+                sp_config_items = ['SP Full Scale', 'SP Function', 'SP Rate', 
                               'SP VOR', 'SP Batch', 'SP Blend', 'SP Source']
-                for j, item in enumerate(config_items):
+                for j, item in enumerate(sp_config_items):
                     row = j + 1  # Start after SP Signal Type row
-                    tkinter.Label(config_frame, text=f"{item}:").grid(row=row//2, column=row%2*2, padx=5, pady=2, sticky='e')
-                    value_label = tkinter.Label(config_frame, text="Not Read")
+                    tkinter.Label(sp_frame, text=f"{item}:").grid(row=row//2, column=row%2*2, padx=5, pady=2, sticky='e')
+                    value_label = tkinter.Label(sp_frame, text="Not Read")
                     value_label.grid(row=row//2, column=row%2*2+1, padx=5, pady=2, sticky='w')
+                    self.mfc2_config_values[i][item] = value_label
+
+                # PV Configuration tab
+                pv_frame = ttk.Frame(config_notebook)
+                config_notebook.add(pv_frame, text='PV Config')
+                
+                # Add PV configuration items
+                pv_config_items = ['Measure Units', 'Time Base', 'Decimal Point', 
+                                 'Gas Factor', 'Log Type', 'PV Signal Type', 'PV Full Scale']
+                for j, item in enumerate(pv_config_items):
+                    tkinter.Label(pv_frame, text=f"{item}:").grid(row=j//2, column=j%2*2, padx=5, pady=2, sticky='e')
+                    value_label = tkinter.Label(pv_frame, text="Not Read")
+                    value_label.grid(row=j//2, column=j%2*2+1, padx=5, pady=2, sticky='w')
                     self.mfc2_config_values[i][item] = value_label
 
             # Read buttons for MFC2
@@ -2020,6 +2052,10 @@ class ControllerGui:
             self.read_mfc2_config_button = tkinter.Button(button_frame, text="Read SP Config", 
                                                     command=self.read_mfc2_config, bg='#90EE90')
             self.read_mfc2_config_button.grid(row=0, column=0, padx=5)
+            
+            self.read_mfc2_pv_config_button = tkinter.Button(button_frame, text="Read PV Config", 
+                                                    command=self.read_mfc2_pv_config, bg='#90EE90')
+            self.read_mfc2_pv_config_button.grid(row=0, column=1, padx=5)
 
         # Configure scrolling
         self.config_frame.bind("<Configure>", self._on_config_frame_configure)
@@ -2142,6 +2178,44 @@ class ControllerGui:
                             self.mfc2_config_values[channel-1][key].config(text=value)
             except Exception as e:
                 print(f"Error reading PV config for channel {channel}: {str(e)}")
+
+    def GoToStep(self):
+        """Moves the profile to a specific step number."""
+        try:
+            # Check if profile is loaded and running
+            if self.ProfileBool["text"] != "Profile is On":
+                print("Profile must be running to move to a specific step")
+                return
+
+            # Get and validate the target step
+            target_step = int(self.GoToStepEntry.get())
+            if target_step < 1:
+                print("Step number must be positive")
+                return
+
+            try:
+                # Verify the step exists in the profile
+                self.ImportPorfile[0][target_step - 1]
+            except:
+                print("Step number exceeds profile length")
+                return
+
+            # Update step number and reset temperature check
+            self.StepNumber["text"] = target_step
+            self.ReachedTempBool = False
+            self.TimeLeft["text"] = 'Not Reached Temp'
+            
+            # Update all setpoints for the new step
+            self.UpdateAllSetPointsInProfile()
+            
+            # Log the manual step change
+            now = time.strftime("%Y-%m-%d_%H-%M-%S")
+            logging.critical("Manually moved to step %d at %s", target_step, now)
+            
+        except ValueError:
+            print("Please enter a valid step number")
+        except Exception as e:
+            print(f"Error moving to step: {e}")
 
 class ConfigurationGui:
     def __init__(self, master):
