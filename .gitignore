@@ -11,11 +11,11 @@
 !Reactor 1 Configuration.txt
 
 # 3) Un-ignore these directories and their contents
-!images/
-!devices/
-!config/
-!gui/
-!Manual/
+!images/**
+!config/**/*.py
+!devices/**/*.py
+!gui/**/*.py
+!Manual/**
 
 # 4) Explicitly ignore these directories and their contents
 dist/
