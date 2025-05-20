@@ -12,9 +12,15 @@
 
 # 3) Un-ignore these directories and their contents
 !images/**
-!config/**/*.py
-!devices/**/*.py
-!gui/**/*.py
+
+!config/
+!devices/
+!gui/
+
+# 4) And within them, only un‑ignore .py files
+!config/*.py
+!devices/*.py
+!gui/*.py
 !Manual/**
 
 # 4) Explicitly ignore these directories and their contents
