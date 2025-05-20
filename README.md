@@ -96,4 +96,5 @@ Logs are stored in the `logs` directory with timestamps. The logging system capt
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+The project was performed using funds from Dr. Karim research. All intelectual property
+belongs to Dr. Karim
