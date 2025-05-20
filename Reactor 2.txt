@@ -4,7 +4,7 @@
 # The code is case sensitive so make sure you write "True" and "False" and 
 # COM1, COM2, etc... Correctly.
 
-Have8ComPorts=False
+Have8ComPorts=True
 HaveWatlow=True
 HaveDosing=False
 HaveNITemperature=True
