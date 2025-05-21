@@ -2,6 +2,12 @@
 
 A Python-based control system for managing a reactor setup with multiple mass flow controllers (MFCs), temperature control, and dosing valve control.
 
+## Version Information
+- Current Version: V5.1.4 (Refactored)
+- Previous Versions:
+  - V5.1.3 (Pre-refactoring)
+  - V5.1.2 (Pre-refactoring)
+
 ## Features
 
 - Configuration GUI for setting up device connections
@@ -19,6 +25,7 @@ A Python-based control system for managing a reactor setup with multiple mass fl
 - NI-DAQmx driver installed
 - Serial ports for MFC and Watlow controllers
 - Required Python packages (see requirements.txt)
+- PyInstaller (for compilation)
 
 ## Installation
 
@@ -38,6 +45,15 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```bash
 pip install -r requirements.txt
 ```
+
+## Compilation
+
+To create a standalone executable, use the following command:
+```bash
+python -m PyInstaller --onefile --collect-all nidaqmx --icon=images/icon.ico --name ReactorControl main.py
+```
+
+This will create a single executable file named `ReactorControl.exe` in the `dist` directory.
 
 ## Usage
 
@@ -73,6 +89,8 @@ ReactorController/
 │   └── controller_gui.py
 ├── utils/
 │   └── logging_config.py
+├── images/
+│   └── icon.ico
 ├── main.py
 ├── requirements.txt
 └── README.md
