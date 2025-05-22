@@ -501,42 +501,80 @@ class ControllerGui:
             print("Invalid Input", "Please enter a numeric value for SP_WRITE_DELAY.")
 
     def CloseProgram(self):
-        self.closing = True
-        self.master.after(100, self.CloseProgram)  # Schedule the close operation
-        if self.after_id is not None:        
+        """Clean up and close the program"""
+        if not getattr(self, 'closing', False):
+            self.closing = True
+            
+            # Cancel any pending after callbacks
+            if self.after_id is not None:        
+                try:
+                    self.master.after_cancel(self.after_id)
+                except tkinter.TclError as e:
+                    print(f"Error canceling scheduled callback: {e}")
+                finally:
+                    self.after_id = None
+            
+            # Stop any running profile
+            if self.ProfileBool["text"] == "Profile is On":
+                self.EndProfile()
+            
+            # Stop any running dosing
+            if hasattr(self, 'DoseBool') and self.DoseBool["text"] == "Dosing is On":
+                self.EndDosing()
+            
+            # Wait for any device operations to complete
             try:
-                self.master.after_cancel(self.after_id)
-            except tkinter.TclError as e:
-                # Log the error if desired; the callback might have already been executed or canceled.
-                print(f"Error canceling scheduled callback: {e}")
-            finally:
-                self.after_id = None
-        
-        for i in range(4):
-            channel=i+1
-            self.brooks1.WriteSP(channel,0)
-            if self.have_8comports:
-                self.brooks2.WriteSP(channel,0)
-        
-        if self.have_watlow:
-            self.wt.ControlMode('Off')
-                
-        try:
-            self.LogFile.close()
-        except:
-            pass
-        
-        if self.have_watlow:
-            self.wt.CloseConnection()
-        if self.have_nitemperature:
-            self.ni.CloseConnection()
-        self.brooks1.CloseConnection()
-        if self.have_8comports:
-            self.brooks2.CloseConnection()
-        if self.have_dosing:
-            self.va.CloseConnection()
-            #close pressure
-        self.master.destroy()
+                with self.device_lock:
+                    # Set all MFCs to zero
+                    for i in range(4):
+                        channel = i+1
+                        try:
+                            self.brooks1.WriteSP(channel, 0)
+                            if self.have_8comports:
+                                self.brooks2.WriteSP(channel, 0)
+                        except Exception as e:
+                            print(f"Error setting MFC to zero: {e}")
+                    
+                    # Turn off temperature control if enabled
+                    if self.have_watlow:
+                        try:
+                            self.wt.ControlMode('Off')
+                        except Exception as e:
+                            print(f"Error turning off temperature control: {e}")
+            except Exception as e:
+                print(f"Error during device cleanup: {e}")
+            
+            # Close log file
+            try:
+                if self.LogFile is not None:
+                    self.LogFile.close()
+            except Exception as e:
+                print(f"Error closing log file: {e}")
+            
+            # Close all device connections
+            try:
+                if self.have_watlow:
+                    self.wt.CloseConnection()
+                if self.have_nitemperature:
+                    self.ni.CloseConnection()
+                self.brooks1.CloseConnection()
+                if self.have_8comports:
+                    self.brooks2.CloseConnection()
+                if self.have_dosing:
+                    self.va.CloseConnection()
+            except Exception as e:
+                print(f"Error closing device connections: {e}")
+            
+            # Force destroy the window
+            try:
+                self.master.quit()  # Stop the mainloop
+                self.master.destroy()  # Destroy the window
+            except Exception as e:
+                print(f"Error destroying window: {e}")
+                # If normal destroy fails, try force quit
+                import sys
+                sys.exit(0)
+
     def WriteMFCSPButton1(self, channel):
         MFCValue = self.MFCInputButton1[channel-1].get()
         try: 
@@ -880,29 +918,36 @@ class ControllerGui:
             self.SetPointPart.config(text=temp)
 
         # Start background thread for device updates
-        threading.Thread(target=self._update_devices_in_background, daemon=True).start()
-        print('Set Points Updated')
+        if not getattr(self, 'closing', False):
+            threading.Thread(target=self._update_devices_in_background, daemon=True).start()
+            print('Set Points Updated')
 
     def _update_devices_in_background(self):
         """Helper method to update device setpoints in background thread"""
+        if getattr(self, 'closing', False):
+            return
+            
         try:
             with self.device_lock:  # Acquire lock before device communication
                 # Update MFC1
                 for j in range(4):
+                    if getattr(self, 'closing', False):
+                        return
                     channel = j+1
                     self.WriteMFCSPButton1(channel)
-                    #time.sleep(self.SPWRITE_DELAY)  # Add delay between writes
                 
                 # Update MFC2 if enabled
                 if self.have_8comports:
                     for j in range(4):
+                        if getattr(self, 'closing', False):
+                            return
                         channel = j+1
                         self.WriteMFCSPButton2(channel)
-                        #time.sleep(self.SPWRITE_DELAY)  # Add delay between writes
                 
                 # Update Watlow if enabled
                 if self.have_watlow:
-                    self.WriteTempSPButton()
+                    if not getattr(self, 'closing', False):
+                        self.WriteTempSPButton()
                     
         except Exception as e:
             logging.error("Error updating device setpoints: %s", str(e))
