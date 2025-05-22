@@ -1,5 +1,6 @@
 import tkinter
 from tkinter import filedialog, ttk
+from tkcalendar import DateEntry  # <-- Add this import (requires tkcalendar)
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import numpy
@@ -14,7 +15,7 @@ class HistoricalPlotWindow:
     def __init__(self, parent, mfc_names=None, log_file_path=None):
         self.window = tkinter.Toplevel(parent)
         self.window.title("Historical Data Plot")
-        self.window.geometry("800x600")
+        self.window.geometry("900x650")
         
         self.mfc_names = mfc_names or []
         self.log_file_path = log_file_path
@@ -33,34 +34,36 @@ class HistoricalPlotWindow:
         self.instrument_combo.pack(side='left', padx=5)
         self.instrument_combo.bind('<<ComboboxSelected>>', self.update_plot)
         
-        # Add time range controls
-        self.time_frame = ttk.LabelFrame(self.control_frame, text="Time Range")
-        self.time_frame.pack(side='left', padx=10)
+        # --- Preset Range Dropdown ---
+        self.preset_var = tkinter.StringVar(value="Last 1 hour")
+        self.preset_options = [
+            "All data",
+            "Last 10 minutes",
+            "Last 1 hour",
+            "Last 6 hours",
+            "Last 24 hours",
+            "Custom"
+        ]
+        ttk.Label(self.control_frame, text="Time Range:").pack(side='left', padx=(15,2))
+        self.preset_combo = ttk.Combobox(self.control_frame, textvariable=self.preset_var, values=self.preset_options, state="readonly", width=15)
+        self.preset_combo.pack(side='left', padx=2)
+        self.preset_combo.bind('<<ComboboxSelected>>', self.on_preset_change)
         
-        # Time range type selection
-        self.time_range_var = tkinter.StringVar(value="last")
-        ttk.Radiobutton(self.time_frame, text="Last N minutes", variable=self.time_range_var, 
-                       value="last", command=self.toggle_time_controls).pack(side='left', padx=5)
-        ttk.Radiobutton(self.time_frame, text="Custom range", variable=self.time_range_var,
-                       value="custom", command=self.toggle_time_controls).pack(side='left', padx=5)
-        
-        # Last N minutes control
-        self.last_minutes_frame = ttk.Frame(self.time_frame)
-        self.last_minutes_frame.pack(side='left', padx=5)
-        ttk.Label(self.last_minutes_frame, text="Minutes:").pack(side='left')
-        self.last_minutes_var = tkinter.StringVar(value="30")
-        self.last_minutes_entry = ttk.Entry(self.last_minutes_frame, textvariable=self.last_minutes_var, width=5)
-        self.last_minutes_entry.pack(side='left', padx=2)
-        
-        # Custom range controls
-        self.custom_range_frame = ttk.Frame(self.time_frame)
-        ttk.Label(self.custom_range_frame, text="From:").pack(side='left')
-        self.start_time_var = tkinter.StringVar()
-        self.start_time_entry = ttk.Entry(self.custom_range_frame, textvariable=self.start_time_var, width=8)
+        # --- Custom Range Frame ---
+        self.custom_frame = ttk.Frame(self.control_frame)
+        # Start date/time
+        ttk.Label(self.custom_frame, text="From:").pack(side='left')
+        self.start_date = DateEntry(self.custom_frame, width=10, date_pattern='y-mm-dd')
+        self.start_date.pack(side='left', padx=2)
+        self.start_time_var = tkinter.StringVar(value="00:00:00")
+        self.start_time_entry = ttk.Entry(self.custom_frame, textvariable=self.start_time_var, width=8)
         self.start_time_entry.pack(side='left', padx=2)
-        ttk.Label(self.custom_range_frame, text="To:").pack(side='left')
-        self.end_time_var = tkinter.StringVar()
-        self.end_time_entry = ttk.Entry(self.custom_range_frame, textvariable=self.end_time_var, width=8)
+        # End date/time
+        ttk.Label(self.custom_frame, text="To:").pack(side='left')
+        self.end_date = DateEntry(self.custom_frame, width=10, date_pattern='y-mm-dd')
+        self.end_date.pack(side='left', padx=2)
+        self.end_time_var = tkinter.StringVar(value="23:59:59")
+        self.end_time_entry = ttk.Entry(self.custom_frame, textvariable=self.end_time_var, width=8)
         self.end_time_entry.pack(side='left', padx=2)
         
         # Add refresh button
@@ -84,107 +87,112 @@ class HistoricalPlotWindow:
         # Load data if log file path is provided
         if self.log_file_path:
             self.load_data()
-            self.toggle_time_controls()  # Initialize time controls visibility
+            self.update_custom_range_fields()
+            self.on_preset_change()
         
-    def toggle_time_controls(self):
-        """Show/hide appropriate time range controls based on selection"""
-        if self.time_range_var.get() == "last":
-            self.last_minutes_frame.pack(side='left', padx=5)
-            self.custom_range_frame.pack_forget()
+    def on_preset_change(self, event=None):
+        if self.preset_var.get() == "Custom":
+            self.custom_frame.pack(side='left', padx=10)
         else:
-            self.last_minutes_frame.pack_forget()
-            self.custom_range_frame.pack(side='left', padx=5)
+            self.custom_frame.pack_forget()
         self.update_plot()
-        
+
+    def update_custom_range_fields(self):
+        if self.data is not None:
+            times = pd.to_datetime(self.data[self.time_column], format='%m/%d/%y %H:%M:%S', errors='coerce')
+            min_dt = times.min()
+            max_dt = times.max()
+            self.start_date.set_date(min_dt.date())
+            self.end_date.set_date(max_dt.date())
+            self.start_time_var.set(min_dt.strftime('%H:%M:%S'))
+            self.end_time_var.set(max_dt.strftime('%H:%M:%S'))
+
     def get_time_range(self):
-        """Get the selected time range for plotting"""
         if self.data is None:
             return None, None
-            
         times = pd.to_datetime(self.data[self.time_column], format='%m/%d/%y %H:%M:%S', errors='coerce')
-        if self.time_range_var.get() == "last":
+        preset = self.preset_var.get()
+        if preset == "All data":
+            return times.min(), times.max()
+        elif preset == "Last 10 minutes":
+            end_time = times.max()
+            start_time = end_time - pd.Timedelta(minutes=10)
+            return start_time, end_time
+        elif preset == "Last 1 hour":
+            end_time = times.max()
+            start_time = end_time - pd.Timedelta(hours=1)
+            return start_time, end_time
+        elif preset == "Last 6 hours":
+            end_time = times.max()
+            start_time = end_time - pd.Timedelta(hours=6)
+            return start_time, end_time
+        elif preset == "Last 24 hours":
+            end_time = times.max()
+            start_time = end_time - pd.Timedelta(hours=24)
+            return start_time, end_time
+        elif preset == "Custom":
             try:
-                minutes = float(self.last_minutes_var.get())
-                end_time = times.max()
-                start_time = end_time - pd.Timedelta(minutes=minutes)
+                start_str = f"{self.start_date.get()} {self.start_time_var.get()}"
+                end_str = f"{self.end_date.get()} {self.end_time_var.get()}"
+                start_time = pd.to_datetime(start_str, format='%Y-%m-%d %H:%M:%S', errors='coerce')
+                end_time = pd.to_datetime(end_str, format='%Y-%m-%d %H:%M:%S', errors='coerce')
                 return start_time, end_time
-            except ValueError:
+            except Exception:
                 return times.min(), times.max()
         else:
-            try:
-                start_time = pd.to_datetime(self.start_time_var.get())
-                end_time = pd.to_datetime(self.end_time_var.get())
-                return start_time, end_time
-            except ValueError:
-                return times.min(), times.max()
-        
+            return times.min(), times.max()
+
     def load_data(self):
         try:
+            # Store current selection before reloading
+            current_selection = self.instrument_var.get()
+            
             # Try reading with utf-8 first
             try:
                 self.data = pd.read_csv(self.log_file_path, encoding='utf-8')
             except UnicodeDecodeError:
                 # Fallback to latin1 if utf-8 fails
                 self.data = pd.read_csv(self.log_file_path, encoding='latin1')
-            
             # Get column names for instrument selection
             columns = self.data.columns.tolist()
             self.time_column = columns[0]  # First column is time
-            
             # Filter out non-data columns
             data_columns = [col for col in columns if col not in ['Time', 'Step Number', 'Time left in step (min)']]
-            
             # Update instrument combo box
             self.instrument_combo['values'] = data_columns
-            if data_columns:
+            
+            # Restore previous selection if it still exists in the new data
+            if current_selection in data_columns:
+                self.instrument_combo.set(current_selection)
+            elif data_columns:  # If previous selection not available, use first item
                 self.instrument_combo.set(data_columns[0])
                 
-            # Set initial time range values
-            times = pd.to_datetime(self.data[self.time_column], format='%m/%d/%y %H:%M:%S', errors='coerce')
-            self.start_time_var.set(times.min().strftime('%H:%M:%S'))
-            self.end_time_var.set(times.max().strftime('%H:%M:%S'))
-            
+            self.update_custom_range_fields()
             self.update_plot()
-                
         except Exception as e:
             tkinter.messagebox.showerror("Error", f"Error loading data: {str(e)}")
-    
+
     def refresh_data(self):
-        """Reload data from the log file"""
         self.load_data()
-    
+
     def update_plot(self, event=None):
         if self.data is None or self.instrument_var.get() == "":
             return
-            
-        # Clear the plot
         self.ax.clear()
-        
-        # Convert time strings to datetime objects
         times = pd.to_datetime(self.data[self.time_column], format='%m/%d/%y %H:%M:%S', errors='coerce')
         values = self.data[self.instrument_var.get()]
-        
-        # Get time range
         start_time, end_time = self.get_time_range()
         if start_time and end_time:
             mask = (times >= start_time) & (times <= end_time)
             times = times[mask]
             values = values[mask]
-        
-        # Plot the selected instrument data
         self.ax.plot(times, values, 'b-')
-        
-        # Format the plot
         self.ax.set_title(f"{self.instrument_var.get()} vs Time")
         self.ax.set_xlabel("Time")
         self.ax.set_ylabel(self.instrument_var.get())
         self.ax.grid(True)
-        
-        # Format x-axis
         self.ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
         self.fig.autofmt_xdate()
-        
-        # Update the canvas
         self.canvas.draw()
 
 class PlotsGUI:
