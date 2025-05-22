@@ -87,6 +87,9 @@ class ControllerGui:
         self.LastDoseFlag = False
         self.ImportPorfile = None
 
+        # Add thread lock for device communication
+        self.device_lock = threading.Lock()
+
         # Add these lines right after master.title
         default_font = ('TkDefaultFont', 10)  # Increase size from default (usually 9 or 10) to 12
         self.master.option_add('*Font', default_font)
@@ -364,36 +367,37 @@ class ControllerGui:
     def ReadInstruments(self):
         # Blocking instrument read function.
         try:
-            # Read MFC1 values (always required)
-            self.mfc1_readings = [self.brooks1.ReadPV(ch) for ch in range(1, 5)]
-            
-            # Read MFC2 values only if enabled
-            if self.have_8comports and self.brooks2:
-                self.mfc2_readings = [self.brooks2.ReadPV(ch) for ch in range(1, 5)]
-            else:
-                self.mfc2_readings = []
-            
-            # Read Watlow values only if enabled
-            if self.have_watlow and self.wt:
-                self.watlow_temp = self.wt.ReadPV()
-            else:
-                self.watlow_temp = None
-            
-            # Read NI Temperature values only if enabled
-            if self.have_nitemperature and self.ni:
-                self.ni_temp = self.ni.ReadPV()
-            else:
-                self.ni_temp = None
-            
-            # Read Dosing Valve values only if enabled
-            if self.have_dosing and self.va:
-                self.dosing_state = self.va.ReadState()
-            else:
-                self.dosing_state = None
+            with self.device_lock:  # Acquire lock before reading devices
+                # Read MFC1 values (always required)
+                self.mfc1_readings = [self.brooks1.ReadPV(ch) for ch in range(1, 5)]
                 
-            # Update plots with new data
-            self.plots_gui.update_plots(self.mfc1_readings, self.mfc2_readings, self.watlow_temp, self.ni_temp)
-            
+                # Read MFC2 values only if enabled
+                if self.have_8comports and self.brooks2:
+                    self.mfc2_readings = [self.brooks2.ReadPV(ch) for ch in range(1, 5)]
+                else:
+                    self.mfc2_readings = []
+                
+                # Read Watlow values only if enabled
+                if self.have_watlow and self.wt:
+                    self.watlow_temp = self.wt.ReadPV()
+                else:
+                    self.watlow_temp = None
+                
+                # Read NI Temperature values only if enabled
+                if self.have_nitemperature and self.ni:
+                    self.ni_temp = self.ni.ReadPV()
+                else:
+                    self.ni_temp = None
+                
+                # Read Dosing Valve values only if enabled
+                if self.have_dosing and self.va:
+                    self.dosing_state = self.va.ReadState()
+                else:
+                    self.dosing_state = None
+                    
+                # Update plots with new data
+                self.plots_gui.update_plots(self.mfc1_readings, self.mfc2_readings, self.watlow_temp, self.ni_temp)
+                
         except Exception as e:
             logging.error("Error reading instruments: %s", str(e))
 
@@ -454,6 +458,9 @@ class ControllerGui:
         self.LogFile = open(self.result_path, 'w', newline='', buffering=1) 
         self.File = csv.writer(self.LogFile, dialect='excel')
 
+        # Update PlotsGUI with the new log file path
+        self.plots_gui.set_log_file(self.result_path)
+
         # Create title row for logged data
         TitleRow = ['Time']
         TitleRow.append('Step Number')
@@ -465,7 +472,6 @@ class ControllerGui:
             TitleRow.append('Ramp Rate (\N{DEGREE SIGN}C/min)')
         
         # Add MFC names to title row
-
         if self.have_8comports:
             TitleRow.extend(self.mfc_names)
         else:
@@ -785,12 +791,18 @@ class ControllerGui:
             if self.ReachedTempBool == False:
                 print('Waiting for Temperature')
                 try:
-                    # Check if temperature has been reached
-                    if abs(float(self.ReadTempPart['text']) - float(self.SetPointPart['text'])) < 1:
+                    if not self.have_watlow:
+                        print("Watlow not enabled, skipping temperature check")
+                        self.ReachedTempBool = True
+                        minutesforstep = float(self.ImportPorfile[0][self.StepNumber["text"] - 1])
+                        print(f"Waiting {minutesforstep} minutes for next step")
+                        self.StepEndTime = datetime.datetime.now() + datetime.timedelta(minutes=minutesforstep)
+                    # Check if temperature has been reached                    
+                    elif abs(float(self.ReadTempPart['text']) - float(self.SetPointPart['text'])) < 1:
                         self.ReachedTempBool = True
                         # Start the timer for this step
                         minutesforstep = float(self.ImportPorfile[0][self.StepNumber["text"] - 1])
-                        print("Waiting %.2f minutes for next step", minutesforstep)
+                        print(f"Waiting {minutesforstep} minutes for next step")
                         self.StepEndTime = datetime.datetime.now() + datetime.timedelta(minutes=minutesforstep)
                 except Exception as e:
                     print("Error in reading temperature: ", e)
@@ -842,23 +854,21 @@ class ControllerGui:
         self.after_id = self.label.after(3000, self.ReadPVs)
 
     def UpdateAllSetPointsInProfile(self):
+        # Update GUI elements in main thread
         for j in range(4):
-            channel=j+1
-            ColIndex=j+3 if self.have_watlow else j+1
+            channel = j+1
+            ColIndex = j+3 if self.have_watlow else j+1
             value = self.ImportPorfile[ColIndex][self.StepNumber["text"]-1]
             self.MFCInputButton1[j].delete(0,"end")
             self.MFCInputButton1[j].insert(0, value)
-            self.WriteMFCSPButton1(channel)
-            
         
         if self.have_8comports:
             for j in range(4):
-                channel=j+1
-                ColIndex=j+3+4
+                channel = j+1
+                ColIndex = j+3+4
                 value = self.ImportPorfile[ColIndex][self.StepNumber["text"]-1]
                 self.MFCInputButton2[j].delete(0,"end")
                 self.MFCInputButton2[j].insert(0, value)
-                self.WriteMFCSPButton2(channel)                        
         
         if self.have_watlow:        
             temp = self.ImportPorfile[1][self.StepNumber["text"]-1]
@@ -868,10 +878,35 @@ class ControllerGui:
             self.RampRateInputButton.delete(0,"end")
             self.RampRateInputButton.insert(0,ramprate) 
             self.SetPointPart.config(text=temp)
-            self.WriteTempSPButton()
 
+        # Start background thread for device updates
+        threading.Thread(target=self._update_devices_in_background, daemon=True).start()
         print('Set Points Updated')
-        
+
+    def _update_devices_in_background(self):
+        """Helper method to update device setpoints in background thread"""
+        try:
+            with self.device_lock:  # Acquire lock before device communication
+                # Update MFC1
+                for j in range(4):
+                    channel = j+1
+                    self.WriteMFCSPButton1(channel)
+                    #time.sleep(self.SPWRITE_DELAY)  # Add delay between writes
+                
+                # Update MFC2 if enabled
+                if self.have_8comports:
+                    for j in range(4):
+                        channel = j+1
+                        self.WriteMFCSPButton2(channel)
+                        #time.sleep(self.SPWRITE_DELAY)  # Add delay between writes
+                
+                # Update Watlow if enabled
+                if self.have_watlow:
+                    self.WriteTempSPButton()
+                    
+        except Exception as e:
+            logging.error("Error updating device setpoints: %s", str(e))
+
     def EndProfile(self):
         self.ProfileBool["text"]="Profile is Off"
         self.StartStop["text"]="Start Profile"

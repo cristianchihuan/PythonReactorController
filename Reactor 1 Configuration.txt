@@ -5,10 +5,10 @@
 # COM1, COM2, etc... Correctly.
 
 Have8ComPorts=False
-HaveWatlow=True
+HaveWatlow=False
 HaveDosing=False
 HaveNITemperature=False
-EnableErrorLogger=True
+EnableErrorLogger=False
 Tittle = TestMFC
 MFCNames= H2, N2, O2, empty, H2, N2, O2, empty
 DefaultMFC1ComPort=COM3
