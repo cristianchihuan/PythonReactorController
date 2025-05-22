@@ -502,8 +502,15 @@ class ControllerGui:
 
     def CloseProgram(self):
         """Clean up and close the program"""
+        if self.ProfileBool["text"] == "Profile is On":
+                self.StartStop.invoke()
+                time.sleep(0.5)
+        
         if not getattr(self, 'closing', False):
+            
+
             self.closing = True
+            # Stop any running profile
             
             # Cancel any pending after callbacks
             if self.after_id is not None:        
@@ -513,14 +520,6 @@ class ControllerGui:
                     print(f"Error canceling scheduled callback: {e}")
                 finally:
                     self.after_id = None
-            
-            # Stop any running profile
-            if self.ProfileBool["text"] == "Profile is On":
-                self.EndProfile()
-            
-            # Stop any running dosing
-            if hasattr(self, 'DoseBool') and self.DoseBool["text"] == "Dosing is On":
-                self.EndDosing()
             
             # Wait for any device operations to complete
             try:
