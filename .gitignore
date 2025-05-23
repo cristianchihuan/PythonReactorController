@@ -16,12 +16,13 @@
 !config/
 !devices/
 !gui/
+!Manuals/
 
 # 4) And within them, only un‑ignore .py files
 !config/*.py
 !devices/*.py
 !gui/*.py
-!Manual/**
+!Manuals/**
 
 # 4) Explicitly ignore these directories and their contents
 dist/
